@@ -62,6 +62,9 @@ def structured(blocks, folder, output, pdf, title):
         entries = []
     for n, b in enumerate(blocks):
         kind, page = b.get("type"), int(b.get("page_idx", 0))
+        source_kind = kind
+        if kind == "chart":
+            kind = "image"   # MinerU charts use the reader's existing figure/panel path.
         if kind == "discarded":
             continue
         box = [max(0, min(1, v / 1000)) for v in b.get("bbox", [])]
@@ -74,16 +77,16 @@ def structured(blocks, folder, output, pdf, title):
         if kind == "list":
             out["content"] = "\n".join("- " + x for x in b.get("list_items", []))
         if kind in ("image", "table"):
-            caps = b.get("image_caption" if kind == "image" else "table_caption", [])
+            caps = b.get(f"{source_kind}_caption", [])
             out["captions"] = [{"content": math_html(x), "bbox": box} for x in caps]
-            out["footnotes"] = [{"content": x} for x in b.get("image_footnote" if kind == "image" else "table_footnote", [])]
+            out["footnotes"] = [{"content": x} for x in b.get(f"{source_kind}_footnote", [])]
             if kind == "table":
                 out["content"] = math_html(b.get("table_body", ""))
                 if not out["content"] and b.get("img_path"):
                     out["type"] = "image"
         if b.get("img_path") and (kind == "image" or not out["content"]):
             source = folder / b["img_path"]
-            label = re.search(r"(?:FIG(?:URE)?\.?|图)\s*(\d+)", " ".join(b.get("image_caption", [])), re.I)
+            label = re.search(r"(?:FIG(?:URE)?\.?|图)\s*(\d+)", " ".join(b.get(f"{source_kind}_caption", [])), re.I)
             if not source.is_file() and label:
                 for entry in entries:
                     if re.search(r"(?:figure|fig\.?|图)\s*" + label[1] + r"\b", entry.get("label", ""), re.I):

@@ -318,6 +318,10 @@ region is not PDF parsing and needs no extra engine. The imported document keeps
 Zotero metadata, and enters the existing five-level generation queue. A previously imported document keeps its text,
 layers and annotations even when its Zotero cache disappears.
 
+MinerU's `chart` blocks enter the same figure path as `image` blocks, using `chart_caption` and `chart_footnote`.
+This keeps plot panels and their caption formulas in the reader and its PDF page map. Already stored documents
+remain unchanged on reopening; correcting an older import requires preserving its layers' paragraph and atom references.
+
 Without a ready cache, the page says it is waiting, checks again every three seconds, and offers retry and cancel.
 It does not assert that a conversion is running: new PDFs may be handled by Zotero's automatic conversion; older
 attachments need the reader to start parsing in Zotero. Once ready, the selected cache opens. Closing Zotero displays
