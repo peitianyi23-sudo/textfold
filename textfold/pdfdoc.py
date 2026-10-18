@@ -63,6 +63,24 @@ def _text(s):
     return (s or "").strip()
 
 
+def _reference_lines(content):
+    """A headingless reference list merged into one text block (as in MinerU's Jamin output).
+
+    Require consecutive bracketed labels, author initials and publication years on every line;
+    numbering alone is ordinary narrative and must stay in the article.
+    """
+    lines = [s.strip() for s in content.splitlines() if s.strip()]
+    entries = [re.fullmatch(r"\[(\d+)\]\s+(.+)", s) for s in lines]
+    if len(entries) < 3 or not all(entries):
+        return []
+    numbers = [int(m[1]) for m in entries]
+    if numbers != list(range(numbers[0], numbers[0] + len(numbers))):
+        return []
+    if not all(re.search(r"\b[A-Z]\.\s", m[2][:100]) and re.search(r"\b(?:19|20)\d{2}\b", m[2]) for m in entries):
+        return []
+    return lines
+
+
 def _md_escape_heading(s):
     return re.sub(r"\s+", " ", s).strip().lstrip("#").strip()
 
@@ -224,9 +242,9 @@ def to_markdown(sc, name="", crops=None, want=None):
     byline = {re.sub(r"\s+", " ", a) for a in authors}   # a file's own: its authors' names, under its title
     # what comes between the title and the first heading (the authors, their places, a date) is the paper's front matter
     has_heading = any(b.get("type") == "paragraph_title" for b in blocks)
-    out, notes, figure, deferred, in_refs, front = [], [], [], [], False, True
+    out, notes, figure, deferred, references, in_refs, front = [], [], [], [], [], False, True
     figure_notes = []   # a figure read as a table: its footnotes, after it
-    seen_title, refs_at = False, None
+    seen_title = False
 
     def place(x):
         """Figures and tables placed after the references (a journal's last pages) go before them."""
@@ -313,8 +331,8 @@ def to_markdown(sc, name="", crops=None, want=None):
                 continue
             front = False
             in_refs = bool(REFS.match(content))
-            if in_refs and refs_at is None:
-                refs_at = len(out)
+            if in_refs:
+                continue   # collect the reference list separately, including headingless ref_text
             deep = depth(content) if paged else min(3, max(1, int(b.get("level") or top) - top + 1))
             out.append("#" * (1 + deep) + " " + _md_escape_heading(content))
             continue
@@ -346,7 +364,10 @@ def to_markdown(sc, name="", crops=None, want=None):
         if kind == "ref_text" or (in_refs and kind in ("text", "list")):
             for line in content.splitlines():
                 if line.strip():
-                    out.append("- " + line.strip().lstrip("-• ").strip())
+                    references.append("- " + line.strip().lstrip("-• ").strip())
+            continue
+        if kind == "text" and (entries := _reference_lines(content)):
+            references.extend("- " + line for line in entries)
             continue
         if kind == "page_footnote":
             notes.append(content)
@@ -359,12 +380,14 @@ def to_markdown(sc, name="", crops=None, want=None):
     flush_figure()
     if figure_notes:
         place(" ".join(figure_notes))
-    if deferred:
-        at = refs_at if refs_at is not None else len(out)
-        out[at:at] = deferred
+    out.extend(deferred)
     if notes:
         out.append("## Notes")
         out.extend(notes)
+    if references:
+        # The shared semantic normalizer recognizes this heading before parse or any model call.
+        # An explicit reference block does not turn following untagged prose into references.
+        out.extend(["## References", *references])
     # a list's items stay together; everything else is a block of its own
     text, prev = [], None
     for x in out:

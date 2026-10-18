@@ -277,6 +277,16 @@ page or the file, heading depth from numbering, a figure's panels grouped under 
 after the references put before them, short front matter dropped. A file that waits for the engine is kept in
 `uploads/` with a note of its name and language beside it, and converted once the engine is installed.
 
+The shared PDF converter separates `ref_text` even without a References heading. Headed bibliographies and merged
+text blocks with consecutive bracketed reference labels, author initials and publication years become one References
+list before semantic normalization and parsing. They stay available at Full, outside narrative units and model prompts;
+Related Work prose and ordinary numbered lists remain narrative. Existing stored papers retain their generated layers
+on reopening, so repairing an older import also requires checking affected section summaries, translations and links.
+
+Figure and table bodies at Key and Takeaway use Brief's centered 82% maximum width, including plots extracted as tables.
+Caption text still follows its own effective level, including when opened locally. Topic keeps its compact overview.
+At Takeaway, captions share the text's left inset so the section's argument spine cannot run through their words.
+
 Other files take the same road (`POST /api/files`, `take_file`; `doc-<file hash>`, the file kept as `original.<ext>`).
 With the engine installed, it reads them all: Word, PowerPoint, Excel, OpenDocument, RTF, EPUB, HTML and MHTML, CSV,
 OFD (its fast tier only: no model is needed) and pictures (either tier, as a scanned page). Without it, TextFold reads
