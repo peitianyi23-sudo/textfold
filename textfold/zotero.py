@@ -20,12 +20,13 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 from . import engine, pdf, pdfdoc, store, zotero_cache
 from .fetch import UA
 
-ZOTERO = "http://localhost:23119"
+ZOTERO = "http://127.0.0.1:23119"
 KEY = re.compile(r"[23456789ABCDEFGHIJKLMNPQRSTUVWXYZ]{8}")   # Zotero's keys, of items and collections
 LIB = re.compile(r"users/0|groups/\d{1,10}")
 ARXIV = re.compile(r"(?:arxiv\.org/(?:abs|pdf|html)/|arXiv:\s*|10\.48550/arXiv\.)(\d{4}\.\d{4,5})", re.I)
@@ -43,6 +44,9 @@ LABEL = {"pdf": "PDF", "epub": "EPUB", "html": "HTML", "docx": "Word", "doc": "W
          "xlsx": "Excel", "odt": "ODT", "rtf": "RTF"}
 _lock = threading.Lock()
 _import_lock = threading.Lock()
+_browse_lock = threading.Lock()
+_browse_pending = {}
+_browse_pages = ThreadPoolExecutor(max_workers=3, thread_name_prefix="zotero-browse")
 
 
 class Off(RuntimeError):
@@ -98,6 +102,40 @@ def _all(path, params=None):
             return rows
 
 
+def _browse_all(path, params=None):
+    """A complete browse listing, sharing simultaneous reads and overlapping at most three later pages.
+
+    Keep attachment enumeration on _all: browsing's pagination does not change the read/import path.
+    Results are not cached here; each refresh still asks Zotero, including after a failed request.
+    """
+    params = params or {}
+    key = (settings()["base"], path, tuple(sorted(params.items())))
+    with _browse_lock:
+        pending = _browse_pending.get(key)
+        owner = pending is None
+        if owner:
+            pending = _browse_pending[key] = Future()
+    if not owner:
+        return pending.result()
+    try:
+        rows, headers = _get(path, {**params, "limit": 100, "start": 0})
+        rows = list(rows or [])
+        total = int(headers.get("Total-Results") or len(rows))
+        for start in range(100, total, 300):
+            pages = [_browse_pages.submit(_get, path, {**params, "limit": 100, "start": offset})
+                     for offset in range(start, min(start + 300, total), 100)]
+            for page in pages:   # upstream order, regardless of completion order
+                rows.extend(page.result()[0] or [])
+        pending.set_result(rows)
+        return rows
+    except Exception as e:
+        pending.set_exception(e)
+        raise
+    finally:
+        with _browse_lock:
+            del _browse_pending[key]
+
+
 def status():
     """Whether Zotero answers, and the libraries it holds: the reader's own (named by the page, in its language), then
     each group."""
@@ -117,7 +155,7 @@ def collections(lib):
     """The library's collections as a flat list, each with its parent ("" at the top), sorted by name."""
     _check(lib)
     out = [{"key": c["key"], "name": c["data"]["name"], "parent": c["data"].get("parentCollection") or "",
-            "items": c.get("meta", {}).get("numItems", 0)} for c in _all(f"{lib}/collections")]
+            "items": c.get("meta", {}).get("numItems", 0)} for c in _browse_all(f"{lib}/collections")]
     return sorted((c for c in out if KEY.fullmatch(c["key"])), key=lambda c: c["name"].lower())
 
 
@@ -131,7 +169,7 @@ def items(lib, collection="", q=""):
     path = f"{lib}/collections/{collection}/items/top" if collection and not q else f"{lib}/items/top"
     opened = links()
     out = []
-    for r in _all(path, params):
+    for r in _browse_all(path, params):
         it = item_of(r)
         if it["type"] in SKIP_TYPES or not KEY.fullmatch(it["key"]):
             continue
