@@ -2,12 +2,13 @@
    Serif = the author's words (Full, Key). Sans = written summaries (Brief, Takeaway, Topic).
    Ink: at every level, the words that survive the next zoom-out are darker. */
 :root {
+  color-scheme: light;
   --surface: #FAF9F7;
   --card: #FFFFFF;
   --ink: #1A1A1A;
   --ink-2: #4A4540;
   --muted: #6B6560;
-  --faint: #BAB3AA;
+  --faint: #756E65;
   --line: #DCD8D1;
   --line-2: #E9E5DF;
   --accent: #6B5CE7;
@@ -28,16 +29,15 @@
   --btn: #6B5CE7; --btn-hover: #5A4AD9; --on-btn: #fff;
   --pop: 0 1px 2px rgba(30, 22, 8, .05), 0 14px 36px -14px rgba(30, 22, 8, .38);
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --surface: #1B1915; --card: #24211C; --ink: #EDE9E3; --ink-2: #C9C3BA; --muted: #9C958B;
-    --faint: #5E5850; --line: #3A362F; --line-2: #2E2B25; --accent: #A79FF4; --accent-soft: #2D2850;
-    --accent-deep: #CFC9FA; --rule: #8A847C; --hl: #8A7024; --hl-ink: #E8C04A;
-    --btn: #6B5CE7; --btn-hover: #7B6DF0; --on-btn: #fff;
-    --pop: 0 1px 2px rgba(0, 0, 0, .3), 0 18px 44px -14px rgba(0, 0, 0, .65);
-  }
-  :root:not([data-theme="light"]) .fbody img { background: #fff; border-radius: 4px; }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1B1915; --card: #24211C; --ink: #EDE9E3; --ink-2: #C9C3BA; --muted: #9C958B;
+  --faint: #A49C91; --line: #3A362F; --line-2: #2E2B25; --accent: #A79FF4; --accent-soft: #2D2850;
+  --accent-deep: #CFC9FA; --rule: #8A847C; --hl: #8A7024; --hl-ink: #E8C04A;
+  --btn: #6B5CE7; --btn-hover: #7B6DF0; --on-btn: #fff;
+  --pop: 0 1px 2px rgba(0, 0, 0, .3), 0 18px 44px -14px rgba(0, 0, 0, .65);
 }
+:root[data-theme="dark"] .fbody img { background: #fff; border-radius: 4px; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -107,7 +107,7 @@ footer.zoom {
 }
 .zoombar.dragging .zthumb { scale: .955; box-shadow: 0 0 0 .5px rgba(30, 20, 0, .1), 0 2px 4px rgba(30, 20, 0, .16), 0 6px 16px rgba(30, 20, 0, .14); }
 .zoombar .sep { position: relative; z-index: 1; color: var(--faint); font-size: 11px; opacity: .6; user-select: none; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .zthumb { background: #3A362F; } }
+:root[data-theme="dark"] .zthumb { background: #3A362F; }
 .hint { color: var(--muted); font-size: 12.5px; }
 .legend { display: none; flex-wrap: wrap; justify-content: flex-end; gap: 4px 14px; font-size: 12.5px; color: var(--muted); }
 html[data-level="0"] .legend, html[data-level="1"] .legend, html[data-level="2"] .legend { display: flex; }

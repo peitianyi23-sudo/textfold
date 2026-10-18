@@ -102,12 +102,12 @@ def page(doc, app=False, assets=None, saved=None, pdf=None):
     inline_images(doc, app)
     t = (WEB / "template.html").read_text()
     if app:
-        head = fonts_head(APP_ASSETS) + '<link rel="stylesheet" href="/static/reader.css"><link rel="stylesheet" href="/static/app.css">'
+        head = '<script src="/static/theme.js"></script>' + fonts_head(APP_ASSETS) + '<link rel="stylesheet" href="/static/reader.css"><link rel="stylesheet" href="/static/app.css">'
         scripts = ('<script src="/static/i18n.js"></script><script src="/static/tutorial.js"></script><script src="/static/reader.js"></script>'
                    '<script src="/static/app.js"></script>')
         side, cls, katex = '<aside id="sidebar" class="collapsed"></aside>', "app", APP_ASSETS + "katex/"
     else:
-        head = fonts_head(assets) + f"<style>{(WEB / 'reader.css').read_text()}</style>"
+        head = f"<script>{(WEB / 'theme.js').read_text()}</script>" + fonts_head(assets) + f"<style>{(WEB / 'reader.css').read_text()}</style>"
         scripts = f"<script>{(WEB / 'i18n.js').read_text()}</script><script>{(WEB / 'reader.js').read_text()}</script>"
         side, cls, katex = "", "static", (assets + "katex/") if assets else None
         if not assets and (_has_tex(doc) or (saved and saved.get("notes"))):   # (an answer's formulas need it too)

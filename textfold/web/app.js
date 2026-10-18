@@ -1170,6 +1170,7 @@
         <div class="stp-body">
         <section><div class="st-list">
           <div class="st-item"><label class="st-main" for="st-ui"><b>${esc(t.language)}</b></label><select class="st-ui" id="st-ui">${I18N.CODES.map((c) => `<option value="${c}"${c === uiLang ? ' selected' : ''}>${esc(I18N.NATIVE[c])}</option>`).join('')}</select></div>
+          <div class="st-item"><label class="st-main" for="st-theme"><b>${esc(t.theme)}</b></label><select id="st-theme">${['system', 'light', 'dark'].map((m) => `<option value="${m}"${m === window.TFTheme.get() ? ' selected' : ''}>${esc(t[`theme_${m}`])}</option>`).join('')}</select></div>
           ${app ? `<div class="st-item st-app"><div class="st-main"><b>TextFold ${esc(app)}</b><span class="st-meta">${esc(t.up_note)} <a href="https://github.com/chenxiachan/textfold" target="_blank" rel="noopener">★ ${esc(t.up_star)}</a></span><span class="st-upd-msg" aria-live="polite"></span></div><button type="button" class="st-btn st-upd">${esc(t.up_check)}</button></div>` : ''}
         </div></section>
         <section><h3>${esc(t.st_models_h)}</h3>${modelSection()}</section>
@@ -1229,6 +1230,7 @@
         msg.textContent = r.kind === 'latest' ? t.up_latest : r.kind === 'dev' ? t.up_dev : r.kind === 'check-failed' ? t.up_check_failed
           : r.kind === 'ready' ? t.up_ready.replace('{v}', r.version) : t.up_new.replace('{v}', r.version || '');
       };
+      q('#st-theme').onchange = (e) => window.TFTheme.set(e.target.value);
       q('.st-ui').onchange = (e) => { setUiLang(e.target.value); render(); };
       const sel = q('.st-model');
       if (sel) sel.onchange = async () => { delete tests.gen; if (!data.askModel) delete tests.ask; update(await api('/api/models/select', { model: sel.value })); };

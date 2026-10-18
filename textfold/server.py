@@ -63,7 +63,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import agents, bridges, build, engine, fetch, langs, library, llm, local, models, notes, office, pdf, pdfdoc, pdftext, pipeline, providers, store, zotero
 
-STATIC = {"app.js": "text/javascript", "app.css": "text/css", "reader.js": "text/javascript",
+STATIC = {"theme.js": "text/javascript", "app.js": "text/javascript", "app.css": "text/css", "reader.js": "text/javascript",
           "reader.css": "text/css", "i18n.js": "text/javascript", "tutorial.js": "text/javascript"}
 # fonts and KaTeX, kept here so that no page asks another server for them (web/vendor)
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
