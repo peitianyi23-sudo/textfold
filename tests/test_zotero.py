@@ -413,6 +413,43 @@ class CacheTest(Setup):
     def setUp(self):
         (self.data / 'zotero.json').unlink(missing_ok=True)
 
+    def test_chart_panels_and_math_caption_reach_the_stored_reader(self):
+        from PIL import Image
+        from bs4 import BeautifulSoup
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache = root / 'cache'
+            (cache / 'images').mkdir(parents=True)
+            for name in ('left.png', 'right.png'):
+                Image.new('RGB', (30, 20), 'blue').save(cache / 'images' / name)
+            blocks = [
+                {'type': 'text', 'text': '1 Results', 'text_level': 1, 'bbox': [100, 10, 900, 50]},
+                {'type': 'text', 'text': 'The measured velocity changes with time in the turbulent flow.', 'bbox': [100, 60, 900, 100]},
+                {'type': 'chart', 'img_path': 'images/left.png', 'chart_caption': [], 'bbox': [100, 200, 480, 600]},
+                {'type': 'chart', 'img_path': 'images/right.png', 'chart_caption': ['FIG. 3. Depth $H = \\sqrt{Kt}$.'],
+                 'chart_footnote': ['Measured in water.'], 'bbox': [520, 200, 900, 600]},
+            ]
+            pdf = root / 'paper.pdf'
+            pdf.write_bytes(PDF)
+            with patch.object(store, 'DATA', root / 'data'), \
+                    patch.object(engine, 'convert', side_effect=AssertionError('must not parse')), \
+                    patch.object(engine, 'crop_here', side_effect=AssertionError('cached pictures exist')):
+                pid = 'pdf-0123456789abcdef'
+                zotero_cache.save(pid, (cache, blocks), pdf, 'Chart paper')
+                d = store.pdir(pid)
+                soup = BeautifulSoup((d / 'source.html').read_text(), 'html.parser')
+                figures = soup.find_all('figure')
+                self.assertEqual(len(figures), 1)
+                self.assertEqual(len(figures[0].find_all('img')), 2)
+                self.assertIn('FIG. 3', figures[0].get_text())
+                self.assertIsNotNone(figures[0].find('math'))
+                self.assertIn('Measured in water.', (d / 'structured_content.json').read_text())
+                for image in figures[0].find_all('img'):
+                    self.assertTrue((d / image['src']).is_file())
+                self.assertTrue(any(b['k'] == 'fig' for b in store.assemble(pid)['blocks']))
+                self.assertTrue(any('FIG. 3' in b['t'] and 'fig' in b
+                                    for b in json.loads((d / 'layout.json').read_text())))
+
     def test_cache_appears_then_imports_without_parsing_and_survives_cache_loss(self):
         data = self.tmp / 'zotero-data'
         self.assertEqual(zotero.read('users/0', 'PDFSKEY2')['needs'], 'zotero-cache')
