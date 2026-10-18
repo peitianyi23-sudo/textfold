@@ -279,19 +279,13 @@ html.lb-open { overflow: hidden; }
 figure.fig figcaption.u { font-family: var(--sans); }
 figure.fig figcaption.u[data-l="4"], figure.fig figcaption.u[data-l="3"] { font-family: var(--sans); font-size: 14.5px; line-height: 1.5; margin: 10px 0 0; }
 .flabel { display: none; font-family: var(--sans); font-weight: 650; color: var(--ink); margin-right: .4em; white-space: nowrap; }
-figure.fig[data-l="3"] .fbody { max-width: 82%; margin: 0 auto; }
-figure.fig[data-l="2"] { display: grid; grid-template-columns: 168px 1fr; gap: 14px; align-items: start; margin: 8px 0 14px; }
-figure.fig[data-l="2"] .fbody { order: 0; }
-figure.fig[data-l="2"] figcaption.u { padding-left: 0; margin: 0; }
+figure.fig[data-l="3"] .fbody, figure.fig[data-l="2"] .fbody, figure.fig[data-l="1"] .fbody { max-width: 82%; margin: 0 auto; }
+figure.fig[data-l="2"] figcaption.u { padding-left: 0; }
 figure.fig[data-l="2"] figcaption .dot, figure.fig[data-l="1"] figcaption .dot { display: none; }
-figure.fig[data-l="1"] { display: flex; align-items: center; gap: 10px; margin: 2px 0 2px 22px; }
-figure.fig[data-l="1"] .fbody { width: 64px; flex: none; }
-figure.fig[data-l="1"] figcaption.u { padding: 0; }
+/* Keep captions beside the Takeaway spine, including a caption opened locally to Full. */
+.doc[data-level="1"] figure.fig figcaption.u { padding-left: 22px; }
 figure.fig[data-l="0"] { display: inline-flex; margin: 0 4px 5px 0; }
 figure.fig[data-l="0"] .fbody { display: none; }
-figure.fig.fig-table[data-l="2"], figure.fig.fig-table[data-l="1"] { display: block; }
-figure.fig.fig-table[data-l="2"] .fbody, figure.fig.fig-table[data-l="1"] .fbody { display: none; }
-figure.fig.fig-table[data-l="2"] figcaption.u { padding-left: 18px; }
 figure.fig .flabel { display: inline; }
 figure.fig[data-l="4"] .flabel::after, figure.fig[data-l="3"] .flabel::after { content: "."; }
 figure.fig[data-l="4"] figcaption.u, figure.fig[data-l="3"] figcaption.u { display: block; }
@@ -353,7 +347,6 @@ math { font-size: 1.04em; }
   .u[data-l="4"], .u[data-l="3"] { font-size: 17px; }
   .zoombar button { padding: 6px 9px; font-size: 13px; }
   .zoombar .sep { display: none; }
-  figure.fig[data-l="2"] { grid-template-columns: 96px 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
