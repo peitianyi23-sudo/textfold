@@ -546,6 +546,25 @@ class CacheTest(Setup):
             shutil.rmtree(data / 'llm-for-zotero-mineru', ignore_errors=True)
             (data / 'zotero.sqlite').unlink(missing_ok=True)
 
+    def test_existing_numeric_cache_without_provenance_uses_database_attachment_and_parent(self):
+        data = self.tmp / 'zotero-data'
+        file = data / 'storage/ATTPDFS2/paper.pdf'
+        cache = cached_pdf(data)
+        try:
+            with closing(sqlite3.connect(data / 'zotero.sqlite')) as db, db:
+                db.execute('CREATE TABLE itemAttachments(itemID INTEGER, parentItemID INTEGER)')
+                db.execute('INSERT INTO items VALUES (124,1,?)', ('PDFSKEY2',))
+                db.execute('INSERT INTO itemAttachments VALUES (123,124)')
+            (cache / '_llm_source.json').unlink()
+            self.assertIsNotNone(zotero_cache.find('users/0', 'PDFSKEY2', 'ATTPDFS2', file, data))
+            self.assertIsNone(zotero_cache.find('users/0', 'WRONGKEY', 'ATTPDFS2', file, data))
+            self.assertIsNone(zotero_cache.find('groups/42', 'PDFSKEY2', 'ATTPDFS2', file, data))
+            (cache / '_llm_source.json').write_text(json.dumps({'attachmentId': 123, 'attachmentKey': 'OTHERKEY', 'parentItemKey': 'PDFSKEY2'}))
+            self.assertIsNone(zotero_cache.find('users/0', 'PDFSKEY2', 'ATTPDFS2', file, data))
+        finally:
+            shutil.rmtree(data / 'llm-for-zotero-mineru', ignore_errors=True)
+            (data / 'zotero.sqlite').unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()

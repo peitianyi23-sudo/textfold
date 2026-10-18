@@ -19,20 +19,6 @@ def find(lib, parent, attachment, pdf, data_dir):
     # Stored PDFs identify the active data directory even when Zotero moved from ~/Zotero.
     data = pdf.parents[2] if pdf.parent.parent.name == "storage" else Path(data_dir).expanduser()
     root = data / "llm-for-zotero-mineru"
-    candidates = []
-    for source in root.glob("*/_llm_source.json"):
-        try:
-            identity = read_json(source)
-            if identity.get("attachmentKey") == attachment and identity.get("parentItemKey") == parent:
-                folder = source.parent
-                if (folder / "full.md").read_text(encoding="utf-8").strip():
-                    blocks = read_json(folder / "content_list.json")
-                    if isinstance(blocks, list) and blocks:
-                        candidates.append((folder, identity, blocks))
-        except (OSError, ValueError):
-            continue
-    if not candidates:
-        return None
     # Keys are library-local; the cache folder's numeric attachment ID belongs to this database.
     # Zotero holds an exclusive database lock. Read a private copy, never bypass locks on the live DB.
     try:
@@ -44,11 +30,28 @@ def find(lib, parent, attachment, pdf, data_dir):
                                    "LEFT JOIN groups g USING(libraryID) WHERE i.key=? AND "
                                    "((?='users/0' AND l.type='user') OR g.groupID=?)",
                                    (attachment, lib, int(lib.split("/")[1]) if lib.startswith("groups/") else -1)).fetchone()
-    except (OSError, sqlite3.Error):
-        return None   # Zotero may be writing the database; try a fresh copy on the next poll.
-    for folder, identity, blocks in candidates:
-        if row and identity.get("attachmentId") == row[0] and folder.name == str(row[0]):
+                if not row:
+                    return None
+                folder = root / str(row[0])
+                source = folder / "_llm_source.json"
+                if source.exists():
+                    identity = read_json(source)
+                    if (identity.get("attachmentId"), identity.get("attachmentKey"), identity.get("parentItemKey")) != (row[0], attachment, parent):
+                        return None
+                else:
+                    # Older local caches predate provenance files. The current database
+                    # identifies their numeric folder and its exact parent within this library.
+                    owner = conn.execute("SELECT p.key FROM itemAttachments a JOIN items p ON p.itemID=a.parentItemID "
+                                         "WHERE a.itemID=?", (row[0],)).fetchone()
+                    if not owner or owner[0] != parent:
+                        return None
+        if not (folder / "full.md").read_text(encoding="utf-8").strip():
+            return None
+        blocks = read_json(folder / "content_list.json")
+        if isinstance(blocks, list) and blocks:
             return folder, blocks
+    except (OSError, ValueError, sqlite3.Error):
+        return None   # Zotero may be writing the database; try a fresh copy on the next poll.
     return None
 
 
