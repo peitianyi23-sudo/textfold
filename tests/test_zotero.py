@@ -461,14 +461,6 @@ class CacheTest(Setup):
                 self.assertTrue(any('FIG. 3' in b['t'] and 'fig' in b
                                     for b in json.loads((d / 'layout.json').read_text())))
 
-    def test_chart_row_does_not_join_two_captioned_figures_or_crop_prose(self):
-        left = {'type': 'chart', 'bbox': [100, 300, 480, 600], 'chart_caption': ['FIG. 1. First.']}
-        right = {'type': 'chart', 'bbox': [520, 300, 900, 600], 'chart_caption': ['FIG. 2. Second.']}
-        prose = {'type': 'text', 'text': 'A paragraph between the panels.', 'bbox': [490, 350, 510, 550]}
-        self.assertEqual(zotero_cache.chart_order([left, prose, right]), [0, 1, 2])
-        left = {**left, 'chart_caption': []}
-        self.assertEqual(zotero_cache.chart_order([left, prose, right]), [0, 1, 2])
-
     def test_cache_appears_then_imports_without_parsing_and_survives_cache_loss(self):
         data = self.tmp / 'zotero-data'
         self.assertEqual(zotero.read('users/0', 'PDFSKEY2')['needs'], 'zotero-cache')

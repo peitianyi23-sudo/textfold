@@ -122,15 +122,10 @@ def _figure_table(b):
     none and pictures in its cells. Its picture (the engine's own, of the whole region) stands for it."""
     if b.get("type") != "table" or not b.get("image_source"):
         return False
+    if any(re.match(r"^\s*(?:table|tab\.|tabelle|表)\s", c, re.I) for c in _captions(b)):
+        return False
     cap = next((c for c in _captions(b) if CAPTION.match(c)), "")
     return bool(FIGURE.match(cap)) if cap else "<img" in (b.get("content") or "")
-
-
-def _panel_boxes(b):
-    """Where a picture's panel labels are ("(a)", "t=1, substep 1"): its captions before the figure's own."""
-    caps = [c for c in b.get("captions") or [] if _text(c.get("content"))]
-    i = next((n for n, c in enumerate(caps) if CAPTION.match(_text(c.get("content")))), len(caps))
-    return [c["bbox"] for c in caps[:i] if c.get("bbox")]
 
 
 def _gap(a, b):
@@ -148,60 +143,123 @@ def _center_in(b, box):
 
 
 def _picture(b):
-    return bool(b.get("bbox")) and ((b.get("type") == "image" and bool(b.get("image_source"))) or _figure_table(b))
+    return bool(b.get("bbox")) and ((b.get("type") in ("image", "chart") and bool(b.get("image_source"))) or _figure_table(b))
 
 
-def _zones(blocks, page_of):
-    """The figures the engine read in pieces, found by where the pieces are on the page: pictures this close together,
-    with the short texts among and around them (a figure's labels, which the fast tier reads as lines of text). By the
-    id of each piece, its figure: {"pictures": the ids of its pictures, "labels": where its labels are}. One with text
-    of the page's own inside it, two figures' captions, or other blocks between its pieces in reading order, is left
-    out: its pieces stay as the engine read them."""
-    out, pages = {}, {}
-    for n, b in enumerate(blocks):
-        pages.setdefault(page_of[id(b)], []).append((n, b))
-    for items in pages.values():
-        groups = [{"pics": [(n, b)], "labels": [], "box": _union([b["bbox"]] + _panel_boxes(b))} for n, b in items if _picture(b)]
-        if not groups:
-            continue
-        texts = [(n, b, _text(b.get("content"))) for n, b in items if b.get("type") in ("text", "paragraph_title") and b.get("bbox")]
-        taken, changed = set(), True
-        while changed:
-            changed = False
-            pair = next(((g, h) for g in groups for h in groups if g is not h and _gap(g["box"], h["box"]) <= NEAR), None)
-            if pair:
-                g, h = pair
-                g["pics"] += h["pics"]
-                g["labels"] += h["labels"]
-                g["box"] = _union([g["box"], h["box"]])
-                groups.remove(h)
-                changed = True
+def _figure_groups(blocks, page_of):
+    """Reconstruct figures by page geometry before reading order or model input.
+
+    Unlabelled connected panels must have exactly one caption owner. A panel reachable
+    from two figures is unresolved: show the original page, never a guessed union.
+    """
+    pages, groups = {}, []
+    for b in blocks:
+        pages.setdefault(page_of[id(b)], []).append(b)
+    for page, items in pages.items():
+        pics = [b for b in items if _picture(b)]
+        texts = [b for b in items if b.get("type") in ("text", "paragraph_title") and b.get("bbox") and _text(b.get("content"))]
+        captions = [b for b in texts if CAPTION.match(_text(b.get("content"))) and
+                    re.match(r"^.+?\d+\s*[.|:：]", _text(b.get("content")))]
+        owners = {id(b): [c for c in _captions(b) if CAPTION.match(c)] for b in pics}
+        external = {}
+        for c in captions:
+            box = c["bbox"]
+            candidates = [b for b in pics if 0 <= box[1] - b["bbox"][3] <= .08 and
+                          min(box[2], b["bbox"][2]) > max(box[0], b["bbox"][0])]
+            if candidates:
+                bottom = max(b["bbox"][3] for b in candidates)
+                candidates = [b for b in candidates if bottom - b["bbox"][3] <= NEAR]
+                b = min(candidates, key=lambda b: abs(b["bbox"][0] - box[0]))
+                owners[id(b)].append(_text(c.get("content")))
+                external[id(b)] = [c]
+
+        tables = [b for b in items if b.get("type") == "table" and b.get("bbox") and not _figure_table(b)]
+
+        def nearby(a, b):
+            box = _union([a["bbox"], b["bbox"]])
+            # Ignore column reading order; prose geometrically between panels is a barrier.
+            return _gap(a["bbox"], b["bbox"]) <= .05 and not any(
+                t not in captions and len(_text(t.get("content")).split()) > 6 and
+                _center_in(t, box) for t in texts) and not any(_center_in(t, box) for t in tables)
+
+        edges = {id(b): {id(c) for c in pics if b is not c and nearby(b,c)} for b in pics}
+        by_id = {id(b): b for b in pics}
+        seeds = {i for i in by_id if owners[i]}
+        assigned = {i: {i} for i in seeds}
+        unresolved, seen = [], set()
+        for i in by_id:
+            if i in seeds or i in seen:
                 continue
-            for n, b, content in texts:
-                words = len(content.split())
-                if n in taken or not content or words > 25 or CAPTION.match(content):
+            component, todo = set(), [i]
+            while todo:
+                j = todo.pop()
+                if j in component or j in seeds:
                     continue
-                short = words <= 6 and not (NUMBERED.match(content) or REFS.match(content) or ABSTRACT.match(content))
-                g = next((g for g in groups if _center_in(b, g["box"]) or (short and _gap(b["bbox"], g["box"]) <= NEAR)), None)
-                if g:
-                    g["labels"].append((n, b))
-                    g["box"] = _union([g["box"], b["bbox"]])
-                    taken.add(n)
-                    changed = True
-        for g in groups:
-            if len(g["pics"]) == 1 and not g["labels"]:
-                continue
-            pieces = {n for n, _ in g["pics"] + g["labels"]}
-            if sum(1 for _, b in g["pics"] if any(CAPTION.match(c) for c in _captions(b))) > 1:
-                continue   # two figures
-            if any(n not in pieces for n in range(min(pieces), max(pieces) + 1)):
-                continue   # something else read between its pieces
-            if any(n not in pieces and b.get("bbox") and _center_in(b, g["box"]) for n, b in items):
-                continue   # the page's own text inside it
-            zone = {"pictures": frozenset(id(b) for _, b in g["pics"]), "labels": [b["bbox"] for _, b in g["labels"]]}
-            for _, b in g["pics"] + g["labels"]:
-                out[id(b)] = zone
-    return out
+                component.add(j)
+                todo.extend(edges[j] - component - seeds)
+            seen.update(component)
+            adjacent = set().union(*(edges[j] & seeds for j in component))
+            if len(adjacent) == 1:
+                assigned[next(iter(adjacent))].update(component)
+            elif len(adjacent) > 1:
+                unresolved.append(component | adjacent)
+            else:
+                assigned[i] = component
+        # Several ambiguous components can share a caption. Render their page only once.
+        if unresolved:
+            bad = set().union(*unresolved)
+            for i, ids in list(assigned.items()):
+                if ids & bad:
+                    bad.update(ids)
+                    del assigned[i]
+            assigned[None] = bad
+        for seed, ids in assigned.items():
+            members = [b for b in pics if id(b) in ids]
+            attached = [t for i in ids for t in external.get(i, [])]
+            box = _union([b["bbox"] for b in members])
+            labels = [t for t in texts if t not in captions and len(_text(t.get("content")).split()) <= 6
+                      and not (NUMBERED.match(_text(t.get("content"))) or REFS.match(_text(t.get("content"))) or ABSTRACT.match(_text(t.get("content"))))
+                      and (_center_in(t, box) or _gap(t["bbox"], box) <= NEAR)]
+            # A native caption continuation in the next column, on the same caption rows.
+            for cap in list(attached):
+                cb = cap["bbox"]
+                attached.extend(t for t in texts if t not in attached and t not in captions and t not in labels
+                                and t.get("type") == "text" and t["bbox"][1] >= box[3]
+                                and abs(t["bbox"][1]-cb[1]) <= NEAR and _gap(t["bbox"], cb) <= .05)
+            parts, heads = [], []
+            for b in sorted(members, key=lambda b: (b["bbox"][1], b["bbox"][0])):
+                caps = _captions(b)
+                for c in caps:
+                    if CAPTION.match(c):
+                        heads.append(c)
+                    elif not PANEL.match(c) and (len(c.split()) > 6 or re.search(r"[.!?;:]$", c) or len(members) == 1):
+                        parts.append(c)
+            for t in sorted(attached, key=lambda t: (t["bbox"][1],t["bbox"][0])):
+                c = _text(t.get("content"))
+                (heads if CAPTION.match(c) else parts).append(c)
+            caption = " ".join(dict.fromkeys(heads + parts))
+            uncertain = (seed is None or (len(members) > 1 and not heads) or
+                         len({CAPTION.match(c)[0].lower() for c in heads}) > 1)
+            bounds = [b["bbox"] for b in members] + [t["bbox"] for t in labels]
+            # Real caption boxes differ from their panel; cache captions repeat the panel box.
+            bounds += [c["bbox"] for b in members for c in (b.get("captions") or [])
+                       if c.get("bbox") and c["bbox"] != b["bbox"] and not CAPTION.match(_text(c.get("content")))
+                       and len(_text(c.get("content")).split()) <= 6]
+            cut = _union(bounds)
+            cut = [round(max(0,cut[0]-PAD),4), round(max(0,cut[1]-.02),4),
+                   round(min(1,cut[2]+PAD),4), round(min(1,cut[3]+PAD),4)]
+            for margin in items:
+                mb = margin.get("bbox")
+                if not mb or margin.get("type") not in DROP:
+                    continue
+                if cut[1] < mb[3] <= box[1]:
+                    cut[1] = round(mb[3] + .002, 4)
+                if box[3] <= mb[1] < cut[3]:
+                    cut[3] = round(mb[1] - .002, 4)
+            groups.append({"members": members, "texts": attached + labels, "caption": caption,
+                           "page": page, "box": [0,0,1,1] if uncertain else cut,
+                           "uncertain": uncertain, "crop": uncertain or len(members) > 1 or len(bounds) > len(members)})
+    return groups
 
 
 def plausible(title):
@@ -215,14 +273,17 @@ def to_markdown(sc, name="", crops=None, want=None):
     """(title, authors, Markdown with HTML for figures and tables) from MinerU's structured content. A figure the
     engine cut up (the accurate tier cuts one into its panels, and their labels into captions) is one picture cut from
     its page: want, a list, gets each such figure's {"page", "box", "blocks"}; crops is the picture made of each,
-    {(page, box): src}. Without its picture, the figure is its pieces as the engine cut them."""
+    {(page, box): src}. An unresolved grouping uses the original page and static author captions."""
     doc = sc.get("metadata", {}).get("document", {}) or {}
     # a PDF or a picture (a page); else a file whose structure is in it (Word, EPUB, ...): its headings' depths are
     # its own, its text is all the author's (no running heads, stamps or front matter to tell from it)
     paged = (sc.get("metadata", {}).get("file_suffix") or "pdf") == "pdf"
-    blocks = [b for p in sc.get("pages", []) for b in p.get("blocks", []) if b.get("type") not in DROP]
+    all_blocks = [b for p in sc.get("pages", []) for b in p.get("blocks", [])]
+    blocks = [b for b in all_blocks if b.get("type") not in DROP]
     page_of = {id(b): p.get("page_idx", n) + 1 for n, p in enumerate(sc.get("pages", [])) for b in p.get("blocks", [])}
-    zones = _zones(blocks, page_of)
+    groups = _figure_groups(all_blocks, page_of) if paged else []
+    grouped = {id(b): g for g in groups for b in g["members"] + g["texts"]}
+    emitted = set()
     # the title the page shows, when the engine found a whole one; else the file's own when it is words (it is often a
     # code: "11-nelson65 mc-nwf1"); else the file's name
     first = next((b for b in blocks if b.get("type") == "doc_title"), None)
@@ -252,16 +313,10 @@ def to_markdown(sc, name="", crops=None, want=None):
 
     def region(members):
         """Where a figure in pieces is on its page (its pieces and their labels), or None: one picture, or pages apart."""
-        pages, ids = {page_of[id(m)] for m in members}, {id(m) for m in members}
-        labels = [box for m in members for box in _panel_boxes(m)]
-        for zone in {id(zones[i]): zones[i] for i in ids if i in zones}.values():
-            if zone["pictures"] <= ids:
-                labels += zone["labels"]
-        if len(pages) != 1 or (len(members) == 1 and not labels) or not all(m.get("bbox") for m in members):
-            return None
-        boxes = [m["bbox"] for m in members] + labels
-        return pages.pop(), [round(max(0.0, min(x[0] for x in boxes) - PAD), 4), round(max(0.0, min(x[1] for x in boxes) - PAD), 4),
-                             round(min(1.0, max(x[2] for x in boxes) + PAD), 4), round(min(1.0, max(x[3] for x in boxes) + PAD), 4)]
+        if len(members) == 1 and members[0].get("figure_region"):
+            g = members[0]["figure_region"]
+            return g["page"], g["box"]
+        return None
 
     def flush_figure(caption=""):
         if not figure:
@@ -271,11 +326,20 @@ def to_markdown(sc, name="", crops=None, want=None):
         at = region(members)
         if at:
             if want is not None:
-                want.append({"page": at[0], "box": at[1], "blocks": [id(m) for m in members]})
+                want.append({"page": at[0], "box": at[1], "blocks": [id(b) for m in members for b in m.get("figure_members", [m])]})
             src = (crops or {}).get((at[0], tuple(at[1])))
+        group = members[0].get("figure_region", {})
+        uncertain = group.get("uncertain") or (at and crops is not None and not src)
         imgs = "".join(f'<img src="{s}" alt="">' for s in ([src] if src else [m["image_source"] for m in members]))
         cap = f"<figcaption>{caption}</figcaption>" if caption else ""
-        place(f"<figure>{imgs}{cap}</figure>")
+        if uncertain:
+            # Static author text stays visible but is not a caption unit sent to a model.
+            notice = f"Unconfirmed figure grouping — original PDF page {at[0]}."
+            author = f"<div>{caption}</div>" if caption else ""
+            imgs = f'<img src="{src}" alt="Original PDF page {at[0]}">' if src else ""
+            place(f"<figure><p><strong>{notice}</strong></p>{imgs}{author}</figure>")
+        else:
+            place(f"<figure>{imgs}{cap}</figure>")
         if figure_notes:
             place(" ".join(figure_notes))
             figure_notes.clear()
@@ -287,6 +351,21 @@ def to_markdown(sc, name="", crops=None, want=None):
         return " ".join(caps[i:]) if i is not None else ""
 
     for b in blocks:
+        if id(b) in grouped:
+            g = grouped[id(b)]
+            if id(g) in emitted:
+                continue
+            emitted.add(id(g))
+            flush_figure()
+            members = g["members"]
+            b = {**members[0], "type": "image", "captions": [{"content": g["caption"]}],
+                 "figure_members": members}
+            if g["crop"]:
+                b["figure_region"] = g
+            figure.extend([b])
+            figure_notes.extend(_text(c.get("content")) for m in members for c in m.get("footnotes") or [] if _text(c.get("content")))
+            flush_figure(g["caption"])
+            continue
         kind, content = b.get("type"), _text(b.get("content"))
         if kind in ("doc_title", "paragraph_title"):
             content = _unwrap(content)
@@ -305,8 +384,6 @@ def to_markdown(sc, name="", crops=None, want=None):
                 front = False
         if paged and kind in ("text", "paragraph_title") and BOILER.match(content):
             continue
-        if kind in ("text", "paragraph_title") and id(b) in zones:
-            continue   # a figure's label read as a line of text ("Reasoning Task", "100"): the figure shows it
         if _figure_table(b):
             kind = "image"
             figure_notes.extend(_text(c.get("content")) for c in b.get("footnotes") or [] if _text(c.get("content")))
@@ -474,6 +551,8 @@ def layout_of(sc):
         no = page.get("page_idx", n) + 1
         for b in page.get("blocks", []):
             kind = b.get("type")
+            if kind == "chart":
+                kind = "image"
             if kind in DROP or not b.get("bbox"):
                 continue
             box = [round(float(x), 4) for x in b["bbox"]]

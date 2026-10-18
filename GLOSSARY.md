@@ -17,3 +17,17 @@ A visual illustration or plot, possibly comprising several panels under one shar
 
 **Table**:
 Information organized in rows and columns, distinct from a plotted or illustrated figure.
+
+**Figure panel**:
+One part of a figure, often identified by a label such as (a) or (b).
+Several panels can belong to one figure and share its caption.
+_Avoid_: Figure, when referring only to one of its panels
+
+**Figure caption**:
+The author's description of a figure and its panels.
+Its continuation across columns remains part of the same caption.
+
+**Extracted block**:
+A region reported by a document extractor.
+An extracted image block can contain a complete figure or only part of one.
+_Avoid_: Figure, unless the block contains the complete figure
