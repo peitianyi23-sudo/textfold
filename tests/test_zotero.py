@@ -426,29 +426,48 @@ class CacheTest(Setup):
                 {'type': 'text', 'text': '1 Results', 'text_level': 1, 'bbox': [100, 10, 900, 50]},
                 {'type': 'text', 'text': 'The measured velocity changes with time in the turbulent flow.', 'bbox': [100, 60, 900, 100]},
                 {'type': 'chart', 'img_path': 'images/left.png', 'chart_caption': [], 'bbox': [100, 200, 480, 600]},
+                # Two-column reading order can put prose before the other panel, although it is above the figure.
+                {'type': 'text', 'text': 'The other column explains the measured turbulent depth.', 'bbox': [520, 60, 900, 100]},
                 {'type': 'chart', 'img_path': 'images/right.png', 'chart_caption': ['FIG. 3. Depth $H = \\sqrt{Kt}$.'],
                  'chart_footnote': ['Measured in water.'], 'bbox': [520, 200, 900, 600]},
             ]
             pdf = root / 'paper.pdf'
             pdf.write_bytes(PDF)
+            def render(pdf, jobs):
+                for page, box, target in jobs:
+                    self.assertEqual(page, 1)
+                    self.assertLess(box[0], .1)
+                    self.assertGreater(box[2], .9)
+                    Image.new('RGB', (120, 40), 'blue').save(target)
+                return {str(target) for _, _, target in jobs}
             with patch.object(store, 'DATA', root / 'data'), \
                     patch.object(engine, 'convert', side_effect=AssertionError('must not parse')), \
-                    patch.object(engine, 'crop_here', side_effect=AssertionError('cached pictures exist')):
+                    patch.object(engine, 'crop_here', side_effect=render):
                 pid = 'pdf-0123456789abcdef'
                 zotero_cache.save(pid, (cache, blocks), pdf, 'Chart paper')
                 d = store.pdir(pid)
                 soup = BeautifulSoup((d / 'source.html').read_text(), 'html.parser')
                 figures = soup.find_all('figure')
                 self.assertEqual(len(figures), 1)
-                self.assertEqual(len(figures[0].find_all('img')), 2)
+                self.assertEqual(len(figures[0].find_all('img')), 1)
                 self.assertIn('FIG. 3', figures[0].get_text())
                 self.assertIsNotNone(figures[0].find('math'))
                 self.assertIn('Measured in water.', (d / 'structured_content.json').read_text())
                 for image in figures[0].find_all('img'):
                     self.assertTrue((d / image['src']).is_file())
+                    with Image.open(d / image['src']) as im:
+                        self.assertEqual(im.size, (120, 40))
                 self.assertTrue(any(b['k'] == 'fig' for b in store.assemble(pid)['blocks']))
                 self.assertTrue(any('FIG. 3' in b['t'] and 'fig' in b
                                     for b in json.loads((d / 'layout.json').read_text())))
+
+    def test_chart_row_does_not_join_two_captioned_figures_or_crop_prose(self):
+        left = {'type': 'chart', 'bbox': [100, 300, 480, 600], 'chart_caption': ['FIG. 1. First.']}
+        right = {'type': 'chart', 'bbox': [520, 300, 900, 600], 'chart_caption': ['FIG. 2. Second.']}
+        prose = {'type': 'text', 'text': 'A paragraph between the panels.', 'bbox': [490, 350, 510, 550]}
+        self.assertEqual(zotero_cache.chart_order([left, prose, right]), [0, 1, 2])
+        left = {**left, 'chart_caption': []}
+        self.assertEqual(zotero_cache.chart_order([left, prose, right]), [0, 1, 2])
 
     def test_cache_appears_then_imports_without_parsing_and_survives_cache_loss(self):
         data = self.tmp / 'zotero-data'

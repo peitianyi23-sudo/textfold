@@ -52,6 +52,36 @@ def find(lib, parent, attachment, pdf, data_dir):
     return None
 
 
+def chart_order(blocks):
+    """Put side-by-side chart panels beside their caption, across a column's intervening prose."""
+    groups, moved = {}, set()
+    for n, caption in enumerate(blocks):
+        box = caption.get("bbox", [])
+        if caption.get("type") != "chart" or not caption.get("chart_caption") or len(box) != 4:
+            continue
+        panels = [n]
+        for i, panel in enumerate(blocks):
+            b = panel.get("bbox", [])
+            if (i in moved or panel.get("type") != "chart" or panel.get("chart_caption") or len(b) != 4
+                    or panel.get("page_idx", 0) != caption.get("page_idx", 0)):
+                continue
+            # Coordinates are 0..1000: a common row, with only a panel gutter between the pictures.
+            if abs(b[1] - box[1]) <= 20 and abs(b[3] - box[3]) <= 20 and max(b[0] - box[2], box[0] - b[2], 0) <= 50:
+                panels.append(i)
+        if len(panels) == 1:
+            continue
+        union = [min(blocks[i]["bbox"][0] for i in panels), min(blocks[i]["bbox"][1] for i in panels),
+                 max(blocks[i]["bbox"][2] for i in panels), max(blocks[i]["bbox"][3] for i in panels)]
+        if any(b.get("type") == "text" and b.get("text", "").strip() and len(b.get("bbox", [])) == 4
+               and b.get("page_idx", 0) == caption.get("page_idx", 0)
+               and union[0] <= (b["bbox"][0] + b["bbox"][2]) / 2 <= union[2]
+               and union[1] <= (b["bbox"][1] + b["bbox"][3]) / 2 <= union[3] for b in blocks):
+            continue
+        groups[n] = sorted(panels, key=lambda i: blocks[i]["bbox"][0])
+        moved.update(i for i in panels if i != n)
+    return [i for n in range(len(blocks)) if n not in moved for i in groups.get(n, [n])]
+
+
 def structured(blocks, folder, output, pdf, title):
     """MinerU content_list's 0..1000 boxes into TextFold's blocks and normalized page map."""
     pages, crops = {}, []
@@ -60,7 +90,8 @@ def structured(blocks, folder, output, pdf, title):
         entries = read_json(geometry).get("entries", [])
     except (OSError, ValueError):
         entries = []
-    for n, b in enumerate(blocks):
+    for n in chart_order(blocks):
+        b = blocks[n]
         kind, page = b.get("type"), int(b.get("page_idx", 0))
         source_kind = kind
         if kind == "chart":
@@ -128,7 +159,12 @@ def save(pid, cached, pdf, title):
     with tempfile.TemporaryDirectory(prefix="textfold-zotero-") as tmp:
         output = Path(tmp)
         sc = structured(blocks, folder, output, pdf, title)
-        _, authors, text = pdfdoc.to_markdown(sc, pdf.name)
+        want = []
+        pdfdoc.to_markdown(sc, pdf.name, want=want)
+        jobs = [(w["page"], w["box"], output / "images" / f"figure-{n}.jpg") for n, w in enumerate(want)]
+        done = engine.crop_here(pdf, jobs) if jobs else set()
+        whole = {(p, tuple(box)): "images/" + f.name for p, box, f in jobs if str(f) in done}
+        _, authors, text = pdfdoc.to_markdown(sc, pdf.name, crops=whole)
         html, _ = markdown.to_html(text)
         meta = {"id": pid, "version": "", "title": title, "authors": authors, "date": "", "doi": "",
                 "snapshot": time.strftime("%Y-%m-%d"), "abs_url": "", "html_url": "", "license": "",
