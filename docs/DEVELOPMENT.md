@@ -357,6 +357,15 @@ the existing start-Zotero message and a retry button. TextFold never enqueues Mi
 hides its own reconversion button on cache imports. No refresh monitoring, versioning or automatic replacement is
 performed. Zotero's address and data directory remain settings-file-only configuration.
 
+Browsing defaults to `127.0.0.1:23119`, avoiding a refused IPv6 localhost connection on Windows; an explicit base is
+used as configured. Once the library is known, collections and items load independently. Browse listings share identical
+in-flight reads and overlap at most three later pages, returning the complete listing in Zotero's order; attachment
+enumeration retains its separate serial path. Search still uses Zotero's `titleCreatorYear` over the selected library.
+The dialog keeps recent successful views for immediate reopening, with the last selected collection and its ancestors;
+the browser session also retains that collection's last view across page navigation. Each opening refreshes, with no
+idle scan. A failed refresh keeps content and offers retry; only a successful collection refresh can confirm deletion
+and select All items. Obsolete requests cannot replace a newer library, collection or search.
+
 An imported document with `source.html` opens from the sidebar immediately even before its first generated language.
 Its layer-generation progress is shown separately as background work. Reopening a cached Zotero PDF whose requested
 language's layers are already current does not enqueue generation again.

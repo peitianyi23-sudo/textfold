@@ -990,31 +990,103 @@
   }
 
   // ── a Zotero library (zotero.py): its collections as Zotero shows them, each item read in a click ──
+  let libraryStatus = null;
+  const libraryViews = new Map();
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('pf-zotero-view') || 'null');
+    if (saved) {
+      libraryStatus = saved.status;
+      libraryViews.set(saved.status.library, { cols: saved.cols, lists: new Map(saved.lists) });
+    }
+  } catch { /* browsing still works without session storage */ }
   async function openLibrary() {
     const dlg = h('dialog', 'settings zlib'); document.body.append(dlg);
     const COL = 'pf-zotero-col';
-    let st = { ok: true, libraries: [] }, cols = [], items = null, col = store.get(COL) || '', query = '', timer = null, seq = 0;
+    let st = libraryStatus || { ok: true, libraries: [] }, cols = [], items = null;
+    let col = '', query = '', timer = null, seq = 0, context = 0, closed = false;
+    let statusError = '', colsError = '', itemsError = '', refreshing = false, colsLoading = true, itemLoading = false, itemRequest = null;
     const opened = new Set();
     const q = (sel) => dlg.querySelector(sel);
     const lib = () => st.library || '';
+    const selectionKey = () => `${COL}:${lib()}`;
+    const view = () => {
+      if (!libraryViews.has(lib())) libraryViews.set(lib(), { cols: null, lists: new Map() });
+      return libraryViews.get(lib());
+    };
+    const listKey = () => query ? `q:${query}` : `c:${col}`;
+    function saveView() {
+      const cached = view();
+      try { sessionStorage.setItem('pf-zotero-view', JSON.stringify({ status: st, cols: cached.cols,
+        lists: [...cached.lists].filter(([key]) => key === `c:${col}`) })); } catch { /* quota or private window */ }
+    }
+    function restore() {
+      col = store.get(selectionKey()) || store.get(COL) || '';
+      cols = view().cols || [];
+      items = view().lists.get(listKey()) || null;
+      expandPath(); saveView();
+    }
+    function expandPath() {
+      for (let c = cols.find((x) => x.key === col); c && c.parent; c = cols.find((x) => x.key === c.parent)) opened.add(c.parent);
+    }
+    function rememberCollection() { store.set(selectionKey(), col); store.set(COL, ''); }
     async function load() {
-      st = await api('/api/zotero').catch((x) => ({ ok: false, error: x.message, libraries: [] }));
-      cols = [];
-      if (st.ok && lib()) {
-        cols = await api(`/api/zotero/collections?lib=${encodeURIComponent(lib())}`).catch(() => []);
-        if (col && !cols.some((c) => c.key === col)) col = '';
-        // the chosen collection's parents open, so it shows in the tree
-        for (let c = cols.find((x) => x.key === col); c && c.parent; c = cols.find((x) => x.key === c.parent)) opened.add(c.parent);
+      const mine = ++context;
+      statusError = ''; refreshing = true; renderState();
+      try {
+        const got = await api('/api/zotero');
+        if (closed || mine !== context) return;
+        if (!got.ok) throw new Error(got.error);
+        const changed = lib() !== got.library, librariesChanged = JSON.stringify(st.libraries) !== JSON.stringify(got.libraries);
+        st = libraryStatus = got;
+        if (changed) { query = ''; opened.clear(); restore(); }
+        if (changed || !q('.zl-q')) render();
+        else if (librariesChanged) q('.zl-lib').innerHTML = libraryOptions();
+        // Once the library is known its tree and item query are independent.
+        await Promise.all([loadCollections(mine), list()]);
+      } catch (e) {
+        if (closed || mine !== context) return;
+        statusError = e.message;
+      } finally {
+        if (!closed && mine === context) { refreshing = false; renderState(); }
       }
-      render(); list();
+    }
+    async function loadCollections(mine) {
+      colsError = ''; colsLoading = true; renderTree();
+      try {
+        const got = await api(`/api/zotero/collections?lib=${encodeURIComponent(lib())}`);
+        if (closed || mine !== context) return;
+        cols = view().cols = got;
+        if (col && !cols.some((c) => c.key === col)) {
+          col = ''; rememberCollection(); list();
+        }
+        expandPath(); saveView();
+      } catch (e) {
+        if (closed || mine !== context) return;
+        colsError = e.message;
+      } finally {
+        if (!closed && mine === context) { colsLoading = false; renderTree(); renderState(); }
+      }
     }
     async function list() {
-      items = null; renderItems();
-      if (!st.ok || !lib()) return;
-      const mine = ++seq;
+      if (!lib() || closed) return;
+      const mine = ++seq, scope = context, cache = view(), key = listKey();
+      if (itemRequest) itemRequest.abort();
+      itemRequest = new AbortController();
+      items = cache.lists.get(key) || null; itemsError = ''; itemLoading = true; renderItems(); renderState();
       const qs = new URLSearchParams({ lib: lib(), collection: query ? '' : col, q: query });
-      const got = await api(`/api/zotero/items?${qs}`).catch(() => []);
-      if (mine === seq) { items = got; renderItems(); }
+      try {
+        const response = await fetch(`/api/zotero/items?${qs}`, { signal: itemRequest.signal });
+        const got = await response.json();
+        if (!response.ok) throw new Error(got.error || response.statusText);
+        if (closed || scope !== context || mine !== seq) return;
+        cache.lists.delete(key); cache.lists.set(key, got);
+        if (cache.lists.size > 8) cache.lists.delete(cache.lists.keys().next().value);
+        items = got; saveView();
+      } catch (e) {
+        if (closed || scope !== context || mine !== seq || e.name === 'AbortError') return;
+        itemsError = e.message;
+      }
+      if (!closed && scope === context && mine === seq) { itemLoading = false; renderItems(); renderState(); }
     }
     function tree(parent) {
       return cols.filter((c) => c.parent === parent).map((c) => {
@@ -1025,27 +1097,51 @@
       }).join('');
     }
     const treeHtml = () => `<div class="zl-col${!col && !query ? ' on' : ''}" data-col=""><span>${esc(t().z_all)}</span></div><ul>${tree('')}</ul>`;
+    const libraryOptions = () => (st.libraries || []).map((l) => `<option value="${esc(l.id)}"${l.id === lib() ? ' selected' : ''}>${esc(l.name || t().z_mine)}</option>`).join('');
     function render() {
       const T = t();
-      const libs = (st.libraries || []).map((l) => `<option value="${esc(l.id)}"${l.id === lib() ? ' selected' : ''}>${esc(l.name || T.z_mine)}</option>`).join('');
+      const libs = libraryOptions();
       dlg.innerHTML = `<div class="st zlb"><div class="zl-head"><h2>${esc(T.z_lib)}</h2>
           ${st.ok && libs ? `<select class="zl-lib" aria-label="${esc(T.z_lib)}">${libs}</select>` : ''}
           <button type="button" class="zl-x" aria-label="${esc(T.st_close)}">×</button></div>
-        ${!st.ok ? `<p class="st-note warn">${esc(st.error === 'api-off' ? T.z_api_off : T.z_off)}</p>` : ''}
-        ${st.ok && lib() ? `<input class="st-search zl-q" type="search" placeholder="${esc(T.z_search)}" value="${esc(query)}">
+        <div class="zl-state" role="status"></div>
+        ${lib() ? `<input class="st-search zl-q" type="search" placeholder="${esc(T.z_search)}" value="${esc(query)}">
           <div class="zl-body"><nav class="zl-tree">${treeHtml()}</nav><div class="zl-items"></div></div>` : ''}</div>`;
       q('.zl-x').onclick = () => dlg.close();
       const ls = q('.zl-lib');
-      if (ls) ls.onchange = async () => { st = await api('/api/zotero/library', { library: ls.value }).catch(() => st); col = ''; store.set(COL, ''); load(); };
+      if (ls) ls.onchange = async () => {
+        const chosen = ls.value, mine = ++context;
+        ++seq; if (itemRequest) itemRequest.abort(); clearTimeout(timer);
+        try {
+          const got = await api('/api/zotero/library', { library: chosen });
+          if (closed || mine !== context) return;
+          if (!got.ok) throw new Error(got.error);
+          st = libraryStatus = got; query = ''; opened.clear(); restore();
+          statusError = ''; refreshing = false; render();
+          await Promise.all([loadCollections(mine), list()]);
+        } catch (e) { if (!closed && mine === context) { statusError = e.message; renderState(); } }
+      };
       const box = q('.zl-q');
-      if (box) box.oninput = () => { clearTimeout(timer); timer = setTimeout(() => { query = box.value.trim(); renderTree(); list(); }, 300); };
+      if (box) box.oninput = () => {
+        clearTimeout(timer); ++seq; if (itemRequest) itemRequest.abort();
+        query = box.value.trim(); items = view().lists.get(listKey()) || null;
+        itemsError = ''; renderTree(); renderItems(); renderState();
+        timer = setTimeout(list, 300);
+      };
       wireTree();
-      renderItems();
+      renderItems(); renderState();
     }
-    function renderTree() { const n = q('.zl-tree'); if (!n) return; n.innerHTML = treeHtml(); wireTree(); }
+    function renderState() {
+      const box = q('.zl-state'); if (!box) return;
+      const T = t(), error = statusError || colsError || itemsError;
+      box.innerHTML = error ? `<p class="st-note warn">${esc(T.z_refresh_failed)} ${esc(error === 'api-off' ? T.z_api_off : error === 'not-running' ? T.z_off : error)}</p><button type="button" class="st-btn zl-retry">${esc(T.st_retry)}</button>`
+        : refreshing || itemLoading || colsLoading ? `<p class="st-note">${esc(T.z_refreshing)}</p>` : '';
+      if (q('.zl-retry')) q('.zl-retry').onclick = load;
+    }
+    function renderTree() { const n = q('.zl-tree'); if (!n) return; n.innerHTML = treeHtml() + (colsLoading && !cols.length ? '<p class="st-note">…</p>' : ''); wireTree(); }
     function wireTree() {
       dlg.querySelectorAll('.zl-col').forEach((n) => { n.onclick = () => {
-        col = n.dataset.col; store.set(COL, col); query = ''; if (q('.zl-q')) q('.zl-q').value = ''; renderTree(); list();
+        clearTimeout(timer); col = n.dataset.col; rememberCollection(); query = ''; saveView(); if (q('.zl-q')) q('.zl-q').value = ''; renderTree(); list();
       }; });
       dlg.querySelectorAll('.zl-tw').forEach((b) => { b.onclick = (e) => {
         e.stopPropagation(); if (opened.has(b.dataset.tw)) opened.delete(b.dataset.tw); else opened.add(b.dataset.tw); renderTree();
@@ -1055,7 +1151,7 @@
       const box = q('.zl-items');
       if (!box) return;
       const T = t();
-      if (items === null) { box.innerHTML = '<p class="st-note">…</p>'; return; }
+      if (items === null) { box.innerHTML = itemsError ? '' : '<p class="st-note">…</p>'; return; }
       if (!items.length) { box.innerHTML = `<p class="st-note">${esc(T.z_none)}</p>`; return; }
       box.innerHTML = items.map((it, i) => {
         const who = it.authors.length > 2 ? `${it.authors[0]} et al.` : it.authors.join(', ');
@@ -1074,8 +1170,9 @@
         pickItem(`${lib()}/${it.key}`, it.title);
       }; });
     }
-    dlg.addEventListener('close', () => dlg.remove());
-    dlg.innerHTML = '<div class="st zlb"><p class="st-note">…</p></div>';
+    dlg.addEventListener('close', () => { closed = true; ++seq; ++context; clearTimeout(timer); if (itemRequest) itemRequest.abort(); dlg.remove(); });
+    if (lib()) restore();
+    render();
     dlg.showModal();
     load();
   }
