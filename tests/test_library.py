@@ -43,6 +43,17 @@ class Library(unittest.TestCase):
         self.assertEqual(library.change({"op": "rename", "id": b["id"], "name": "Group"})["folders"][1]["name"], "Group")
         self.assertEqual(json.loads(library.path().read_text())["folders"][1]["name"], "Group")
 
+    def test_imported_text_is_readable_before_levels_exist(self):
+        pid = 'pdf-0123456789abcdef'
+        d = store.pdir(pid)
+        d.mkdir(parents=True)
+        (d / 'meta.json').write_text(json.dumps({'title': 'Imported PDF'}))
+        self.assertFalse(store.papers()[0]['readable'])
+        (d / 'source.html').write_text('<p>Already imported words.</p>')
+        paper = store.papers()[0]
+        self.assertEqual(paper['langs'], [])
+        self.assertTrue(paper['readable'])
+
     def test_a_new_folder_with_the_document_it_was_made_for(self):   # (the menu a document's right click opens)
         a = library.change({"op": "new", "name": "A"})["folders"][0]
         library.change({"op": "move", "papers": ["2512.24601"], "folder": a["id"]})

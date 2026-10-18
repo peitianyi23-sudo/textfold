@@ -194,6 +194,7 @@ button.primary:hover { background: var(--btn-hover); }
 .jobcard { margin-top: 22px; padding: 14px 16px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); font-family: var(--sans); }
 .jc-t { font-weight: 650; font-size: 14.5px; }
 .jc-s { font-size: 13px; color: var(--muted); margin: 4px 0 6px; }
+.z-attachment { display: block; max-width: 100%; margin: 8px 0; font: inherit; color: var(--ink); background: var(--card); }
 .jc-e { font-size: 13.5px; color: var(--r-limitation); margin-top: 4px; }
 .jc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .jc-stop, .jc-go, .gen-toast .g-stop { flex: none; border: 1px solid var(--line); border-radius: 8px; background: none; padding: 3px 10px;

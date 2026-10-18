@@ -6,10 +6,12 @@ fake answers on a free port of this computer, and the server run here looks for 
 Run from the repo root:
     python3 -m unittest discover tests
 """
+from contextlib import closing
 import json
 import os
 import shutil
 import site
+import sqlite3
 import socket
 import subprocess
 import sys
@@ -22,8 +24,9 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
-from textfold import models, store, zotero
+from textfold import engine, models, pdfdoc, store, zotero, zotero_cache
 
 ROOT = Path(__file__).resolve().parents[1]
 PDF = b"%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n"
@@ -238,9 +241,9 @@ class ReadTest(Setup):
         got = zotero.read("users/0", "HTMLKEY2")
         self.assertEqual((got["name"], got["data"].decode(), got["refs"]), ("snap.html", SNAPSHOT, []))
 
-    def test_a_pdf_found_in_storage_carries_its_doi(self):
+    def test_a_pdf_found_in_storage_waits_for_its_cache(self):
         got = zotero.read("users/0", "PDFSKEY2")   # (Zotero does not say where: found in its data folder)
-        self.assertEqual((got["name"], got["data"], got["refs"]), ("paper.pdf", PDF, ["10.1234/abcd"]))
+        self.assertEqual((got["name"], got["needs"], got["attachment"]), ("paper.pdf", "zotero-cache", "ATTPDFS2"))
 
     def test_a_doi_alone_is_read_online(self):
         self.assertEqual(zotero.read("users/0", "DIGIKEY2")["ref"], "10.5555/only")
@@ -265,7 +268,8 @@ class ReadTest(Setup):
                                                  "doi": "", "abs_url": "", "source": {"kind": "pdf", "name": "paper.pdf"}, "label": "PDF · paper.pdf"}))
         self.assertFalse(zotero.apply(d.name))   # not read from Zotero: as it was
         got = zotero.read("users/0", "PDFSKEY2")
-        zotero.link("users/0", "PDFSKEY2", d.name, got["title"], {**got["record"], "citekey": "lovelace2024"})
+        record = zotero.record_of(self.fake.items["PDFSKEY2"], zotero.item_of(self.fake.items["PDFSKEY2"]))
+        zotero.link("users/0", "PDFSKEY2", d.name, got["title"], {**record, "citekey": "lovelace2024"})
         self.assertTrue(zotero.apply(d.name))
         m = json.loads((d / "meta.json").read_text())
         self.assertEqual((m["title"], m["authors"], m["date"], m["doi"], m["abs_url"], m["label"]),
@@ -337,13 +341,36 @@ class ServerTest(Setup):
         listed = {p["id"]: p for p in self.call("/api/papers")[1]}
         self.assertEqual((listed[pid]["title"], listed[pid].get("zotero")), ("A saved page", True))
 
-    def test_a_pdf_waits_for_the_engine_as_a_dropped_one_does(self):
+    def test_a_pdf_waits_for_zotero_without_an_engine_upload(self):
         code, d = self.call("/api/zotero/read", {"item": "users/0/PLNPKEY2", "lang": "en"})   # (no DOI: nothing looked up online)
-        self.assertEqual((code, d.get("needs"), d["name"]), (200, "engine", "plain.pdf"), d)
-        self.assertTrue(d["upload"].startswith("pdf-"))
+        self.assertEqual((code, d.get("needs"), d["name"]), (200, "zotero-cache", "plain.pdf"), d)
+        self.assertNotIn("upload", d)
+        self.assertFalse((self.data / "uploads").exists())
 
     def test_an_arxiv_item_comes_back_as_its_reference(self):
         self.assertEqual(self.call("/api/zotero/read", {"item": "users/0/ARXVKEY2", "lang": "en"}), (200, {"ref": "2201.11903", "title": "Chain of thought"}))
+
+    def test_a_waiting_route_imports_when_the_cache_appears(self):
+        body = {"item": "users/0/PDFSKEY2", "lang": "en"}
+        self.assertEqual(self.call('/api/zotero/read', body)[1]['needs'], 'zotero-cache')
+        data = self.tmp / 'zotero-data'
+        cached_pdf(data)
+        try:
+            code, got = self.call('/api/zotero/read', body)
+            self.assertEqual(code, 200, got)
+            self.assertIn('paper', got)
+            self.assertTrue((self.data / 'papers' / got['paper'] / 'source.pdf').exists())
+            self.assertEqual(self.call('/api/engine')[1]['pending'], [])
+            self.assertFalse(any(j['kind'] in ('convert', 'install') for j in self.call('/api/jobs')[1]))
+            store.write(got['paper'], 'en', {'version': 'test-version', 'units': {}, 'chunks': {}})
+            again = self.call('/api/zotero/read', body)[1]
+            self.assertEqual(again['paper'], got['paper'])
+            self.assertNotIn('job', again)   # opening completed layers never enqueues another generation
+            store.write(got['paper'], 'tr-zh', {'version': 'translation', 'base': 'test-version'})
+            self.assertNotIn('job', self.call('/api/zotero/read', {**body, 'lang': 'zh'})[1])
+        finally:
+            shutil.rmtree(data / 'llm-for-zotero-mineru', ignore_errors=True)
+            (data / 'zotero.sqlite').unlink(missing_ok=True)
 
     def test_refusals(self):
         self.assertEqual(self.call("/api/zotero/read", {"item": "users/0/NTHGKEY2"}), (400, {"error": "no-file"}))
@@ -354,6 +381,122 @@ class ServerTest(Setup):
         z = json.loads((self.home / ".textfold" / "settings.json").read_text())["zotero"]
         self.assertEqual((z["base"], z["data_dir"]), (self.base, self.settings["zotero"]["data_dir"]))   # only the library changed
         self.call("/api/zotero/library", {"library": "users/0"})
+
+
+
+# A cache fixture with the same on-disk schema as llm-for-zotero; no user papers are read.
+def cached_pdf(data, parent='PDFSKEY2', attachment='ATTPDFS2', ident=123, library=1):
+    from PIL import Image
+    with closing(sqlite3.connect(data / 'zotero.sqlite')) as db, db:
+        db.executescript('CREATE TABLE IF NOT EXISTS libraries(libraryID INTEGER, type TEXT);'
+                         'CREATE TABLE IF NOT EXISTS groups(libraryID INTEGER, groupID INTEGER);'
+                         'CREATE TABLE IF NOT EXISTS items(itemID INTEGER, libraryID INTEGER, key TEXT);')
+        db.execute('INSERT INTO libraries VALUES (?,?)', (library, 'user' if library == 1 else 'group'))
+        db.execute('INSERT INTO items VALUES (?,?,?)', (ident, library, attachment))
+    folder = data / 'llm-for-zotero-mineru' / str(ident)
+    (folder / 'images').mkdir(parents=True, exist_ok=True)
+    Image.new('RGB', (30, 20), 'blue').save(folder / 'images/fig.png')
+    (folder / '_llm_source.json').write_text(json.dumps({'attachmentId': ident, 'attachmentKey': attachment, 'parentItemKey': parent}))
+    (folder / 'full.md').write_text('# Cached paper\n\nOriginal words.')
+    blocks = [
+        {'type': 'text', 'text': '1 Introduction', 'text_level': 1, 'bbox': [100, 100, 900, 150], 'page_idx': 0},
+        {'type': 'text', 'text': 'These are the original cached words and the method used to measure the turbulent velocity field.', 'bbox': [100, 160, 900, 300], 'page_idx': 0},
+        {'type': 'equation', 'text': '$$E = mc^2$$', 'bbox': [200, 310, 800, 350], 'page_idx': 0},
+        {'type': 'image', 'img_path': 'images/fig.png', 'image_caption': ['Figure 1. Measured field $u^2$.'], 'bbox': [100, 100, 900, 500], 'page_idx': 1},
+        {'type': 'table', 'table_body': '<table><tr><td>42</td></tr></table>', 'table_caption': ['Table 1. Values.'], 'bbox': [100, 600, 900, 800], 'page_idx': 1},
+    ]
+    (folder / 'content_list.json').write_text(json.dumps(blocks))
+    return folder
+
+
+class CacheTest(Setup):
+    def setUp(self):
+        (self.data / 'zotero.json').unlink(missing_ok=True)
+
+    def test_cache_appears_then_imports_without_parsing_and_survives_cache_loss(self):
+        data = self.tmp / 'zotero-data'
+        self.assertEqual(zotero.read('users/0', 'PDFSKEY2')['needs'], 'zotero-cache')
+        cache = cached_pdf(data)
+        try:
+            with patch.object(engine, 'convert', side_effect=AssertionError('must not parse')), patch.object(engine, 'crop', side_effect=AssertionError('must not use engine')):
+                got = zotero.read('users/0', 'PDFSKEY2')
+            d = store.pdir(got['paper'])
+            html = (d / 'source.html').read_text()
+            self.assertIn('original cached words', html)
+            self.assertIn('<math', html)
+            self.assertIn('<img', html)
+            self.assertIn('<table', html)
+            self.assertNotIn('$u^2$', html)
+            self.assertEqual((d / 'source.pdf').read_bytes(), PDF)
+            self.assertEqual(json.loads((d / 'layout.json').read_text())[0]['b'], [.1, .1, .9, .15])
+            self.assertTrue(any(p['page'] == 2 for p in pdfdoc.place(got['paper']).values()))
+            (d / 'notes.json').write_text('{"keep":true}')
+            shutil.rmtree(cache)
+            self.assertEqual(zotero.read('users/0', 'PDFSKEY2')['paper'], got['paper'])
+            self.assertEqual((d / 'notes.json').read_text(), '{"keep":true}')
+        finally:
+            shutil.rmtree(data / 'llm-for-zotero-mineru', ignore_errors=True)
+            (data / 'zotero.sqlite').unlink(missing_ok=True)
+
+    def test_missing_image_is_rendered_from_selected_pdf_without_writing_the_cache(self):
+        data = self.tmp / 'zotero-data'
+        cache = cached_pdf(data)
+        try:
+            (cache / 'images/fig.png').unlink()
+            def render(pdf, crops):
+                from PIL import Image
+                self.assertEqual(pdf, data / 'storage/ATTPDFS2/paper.pdf')
+                for page, box, target in crops:
+                    self.assertEqual((page, box), (2, [.1, .1, .9, .5]))
+                    Image.new('RGB', (40, 30)).save(target)
+                return {str(c[2]) for c in crops}
+            with tempfile.TemporaryDirectory() as tmp, patch.object(engine, 'crop_here', side_effect=render) as crop:
+                sc = zotero_cache.structured(json.loads((cache / 'content_list.json').read_text()), cache, Path(tmp),
+                                            data / 'storage/ATTPDFS2/paper.pdf', 'Paper')
+                self.assertTrue((Path(tmp) / sc['pages'][1]['blocks'][0]['image_source']).exists())
+                crop.assert_called_once()
+            self.assertEqual(list((cache / 'images').iterdir()), [])
+        finally:
+            shutil.rmtree(data / 'llm-for-zotero-mineru', ignore_errors=True)
+            (data / 'zotero.sqlite').unlink(missing_ok=True)
+
+    def test_multiple_pdfs_remember_choice_and_switch_during_wait(self):
+        self.fake.children['ARXVKEY2'] = self.fake.children['PDFSKEY2'] + self.fake.children['PLNPKEY2']
+        try:
+            got = zotero.read('users/0', 'ARXVKEY2')
+            self.assertEqual(got['needs'], 'attachment')   # PDF selection precedes arXiv
+            got = zotero.read('users/0', 'ARXVKEY2', 'ATTPLNP2')
+            self.assertEqual((got['needs'], got['attachment']), ('zotero-cache', 'ATTPLNP2'))
+            self.assertEqual(zotero.read('users/0', 'ARXVKEY2')['attachment'], 'ATTPLNP2')
+            self.assertEqual(zotero.read('users/0', 'ARXVKEY2', select=True)['selected'], 'ATTPLNP2')
+            old = self.data / 'papers/pdf-0123456789abcdef'
+            old.mkdir(exist_ok=True)
+            (old / 'source.html').write_text('Previously imported PDF')
+            zotero.link('users/0', 'ARXVKEY2', old.name, 'Old', {'attachment': 'ATTPLNP2'})
+            self.assertEqual(zotero.read('users/0', 'ARXVKEY2', 'ATTPDFS2')['attachment'], 'ATTPDFS2')
+            switched = zotero.read('users/0', 'ARXVKEY2')
+            self.assertEqual(switched['needs'], 'zotero-cache')
+            self.assertNotIn('paper', switched)
+            self.assertEqual((old / 'source.html').read_text(), 'Previously imported PDF')
+            with self.assertRaisesRegex(ValueError, 'bad-attachment'):
+                zotero.read('users/0', 'ARXVKEY2', 'ATTHTML2')
+        finally:
+            del self.fake.children['ARXVKEY2']
+
+    def test_library_identity_and_partially_written_output(self):
+        data = self.tmp / 'zotero-data'
+        file = data / 'storage/ATTPDFS2/paper.pdf'
+        cache = cached_pdf(data, library=2)
+        try:
+            self.assertIsNone(zotero_cache.find('users/0', 'PDFSKEY2', 'ATTPDFS2', file, data))
+            with closing(sqlite3.connect(data / 'zotero.sqlite')) as db, db:
+                db.execute('INSERT INTO groups VALUES (2,42)')
+            self.assertIsNotNone(zotero_cache.find('groups/42', 'PDFSKEY2', 'ATTPDFS2', file, data))
+            (cache / 'content_list.json').write_text('[{')
+            self.assertIsNone(zotero_cache.find('groups/42', 'PDFSKEY2', 'ATTPDFS2', file, data))
+        finally:
+            shutil.rmtree(data / 'llm-for-zotero-mineru', ignore_errors=True)
+            (data / 'zotero.sqlite').unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

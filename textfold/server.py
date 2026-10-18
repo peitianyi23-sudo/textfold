@@ -577,11 +577,18 @@ def make_handler(jobs):
                     except ValueError as e:
                         return self.json({"error": str(e)}, 400)
                     return self.json(zotero.status())
-                if u.path == "/api/zotero/read":   # an item of the Zotero library: its paper online, or its file as a dropped one
+                if u.path == "/api/zotero/read":   # Zotero PDFs consume an existing cache; other item types keep their existing paths
                     lib, _, key = str(body.get("item") or "").rpartition("/")
                     lang = body.get("lang") if body.get("lang") in langs.LANGS else "en"
                     try:
-                        got = zotero.read(lib, key)
+                        got = zotero.read(lib, key, str(body.get("attachment") or ""), bool(body.get("select")))
+                        if got.get("needs") or got.get("paper"):
+                            if got.get("paper"):
+                                en = store.read(got["paper"], "en")
+                                tr = store.read(got["paper"], f"tr-{lang}") if lang != "en" else None
+                                if en is None or (lang != "en" and (tr is None or tr.get("base") != en["version"])):
+                                    got["job"] = jobs.submit(got["paper"], lang, False)
+                            return self.json(got)
                         if "ref" in got:   # generated as a pasted link is (from the page, which asks for a model first)
                             pid = store.resolve(got["ref"])
                             zotero.link(lib, key, pid, got["title"])
@@ -589,7 +596,7 @@ def make_handler(jobs):
                     except zotero.Off as e:
                         return self.json({"error": str(e)}, 503)
                     except ValueError as e:   # no file and no paper online; not a library or item
-                        return self.json({"error": str(e) if str(e) in ("no-file", "no-fulltext", "bad-library", "bad-item") else "bad-ref"}, 400)
+                        return self.json({"error": str(e) if str(e) in ("no-file", "no-fulltext", "bad-library", "bad-item", "bad-attachment") else "bad-ref"}, 400)
                     named = {"X-Name": quote(got["name"]), "X-Lang": lang, "X-Refs": quote(json.dumps(got["refs"]))}
                     reply, code = take_file(jobs, got["data"], named)
                     pid = reply.get("paper") or reply.get("upload") or (reply.get("job") or {}).get("pid")

@@ -82,10 +82,10 @@
       const title = (p.titles && p.titles[uiLang]) || p.title;
       const langs = p.langs.map((l) => `<span${l === uiLang ? ' class="on"' : ''}>${SHORT[l] || l}</span>`).join('');
       const active = PAPER && PAPER.id === p.id;
-      const unfinished = !j && !p.langs.length;   // stopped (or failed) before its first language: a click goes on with it
+      const unfinished = !j && !p.langs.length && !p.readable;
       return `<div class="sb-row" data-pid="${p.id}" data-q="${esc(hay(p))}"><a class="sb-item${active ? ' active' : ''}${unfinished ? ' unfinished' : ''}" href="${unfinished ? '#' : `/p/${p.id}?lang=${pick(p)}`}"${unfinished ? ` data-resume="${p.id}"` : ''} title="${esc(p.title)}">
         <span class="sb-t">${esc(title)}</span><span class="sb-m"><span class="sb-id">${p.id}</span><span class="sb-langs">${langs}</span></span>
-        ${j ? progress(j, T) : unfinished ? `<span class="sb-stage">${esc(T.unfinished)}</span>` : ''}</a>` +
+        ${j ? `${p.readable ? `<span class="sb-stage">${esc(T.read_first)}</span>` : ''}${progress(j, T)}` : unfinished ? `<span class="sb-stage">${esc(T.unfinished)}</span>` : ''}</a>` +
         (j ? stopBtn(j, T) : `<button type="button" class="sb-del" data-del="${p.id}" title="${esc(T.del_paper)}" aria-label="${esc(T.del_paper)}">×</button>`) + '</div>';
     };
     // papers, Wikipedia articles, GitHub READMEs and documents of one's own, each under its name when there is more than one kind
@@ -684,7 +684,7 @@
       location.href = `/p/${PAPER.id}?lang=${encodeURIComponent(lang)}`;
     }
     const src = PAPER.source || {};
-    if ((src.kind === 'pdf' && src.tier !== 'accurate') || (src.kind === 'file' && src.tier === 'fast')) {
+    if (src.engine !== 'llm-for-zotero' && ((src.kind === 'pdf' && src.tier !== 'accurate') || (src.kind === 'file' && src.tier === 'fast'))) {
       const acc = h('button', 'cmpbtn accbtn');
       acc.type = 'button';
       acc.textContent = t().convert_acc;
@@ -872,24 +872,47 @@
       if (d.paper) { location.href = `/p/${d.paper}?lang=${encodeURIComponent(lang)}`; return; }   // read already
       watch(d.job, onCard(d.via === 'online' ? null : name, mine, d.via === 'online' ? t().pdf_online.replace('{ref}', d.ref) : ''));
     }
-    // an item of the Zotero library (zotero.py): its paper online, generated as a link is; else its file, read as a
-    // file dropped here is
+    // Zotero PDFs use the selected attachment’s existing MinerU cache; wait without starting a parser.
     async function readItem(item, title) {
       err.hidden = true;
       const lang = sel.value, mine = {};
       latest = mine;
       card.hidden = false;
       card.innerHTML = `<div class="jc-t">${esc(title)}</div><div class="jc-s">${esc(t().file_reading)}</div><span class="sb-prog"><i style="width:4%"></i></span>`;
-      try {
-        const d = await api('/api/zotero/read', { item, lang });
-        if (latest !== mine) return;
-        if (d.ref) {
-          if (!modelName) { card.hidden = true; fail(t().no_model); return; }
-          start(d.ref, title);
-          return;
+      const cancel = () => { latest = {}; card.hidden = true; };
+      let requestSeq = 0;
+      const request = async (attachment = '', select = false) => {
+        const seq = ++requestSeq;
+        try {
+          if (latest !== mine) return;
+          const d = await api('/api/zotero/read', { item, lang, attachment, select });
+          if (latest !== mine || seq !== requestSeq) return;
+          if (d.needs === 'attachment' || d.needs === 'zotero-cache') {
+            const waiting = d.needs === 'zotero-cache';
+            card.innerHTML = `<div class="jc-t">${esc(title)}</div><p class="jc-s">${esc(waiting ? t().z_cache_wait : t().z_choose)}</p>` +
+              `<select class="z-attachment" aria-label="${esc(t().z_choose)}">${d.attachments.map((a) => `<option value="${esc(a.key)}"${a.key === (d.attachment || d.selected) ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select> ` +
+              `<button type="button" class="z-retry jc-go">${esc(waiting ? t().z_retry : t().z_read)}</button> <button type="button" class="z-cancel jc-stop">${esc(t().not_now)}</button>`;
+            const chosen = () => card.querySelector('.z-attachment').value;
+            card.querySelector('.z-retry').onclick = () => request(chosen());
+            card.querySelector('.z-cancel').onclick = cancel;
+            card.querySelector('.z-attachment').onchange = () => request(chosen());
+            if (waiting) setTimeout(() => { if (seq === requestSeq && latest === mine) request(d.attachment); }, 3000);
+            return;
+          }
+          if (d.ref) {
+            if (!modelName) { card.hidden = true; fail(t().no_model); return; }
+            start(d.ref, title);
+            return;
+          }
+          took(d, d.name || title, mine, lang);
+        } catch (x) {
+          if (latest !== mine || seq !== requestSeq) return;
+          card.innerHTML = `<p class="jc-s">${esc(errText(x.message))}</p><button type="button" class="z-retry jc-go">${esc(t().z_retry)}</button> <button type="button" class="z-cancel jc-stop">${esc(t().not_now)}</button>`;
+          card.querySelector('.z-retry').onclick = () => request(attachment, select);
+          card.querySelector('.z-cancel').onclick = cancel;
         }
-        took(d, d.name || title, mine, lang);
-      } catch (x) { card.hidden = true; fail(errText(x.message)); }
+      };
+      request('', true);
     }
     pickItem = readItem;
     document.getElementById('zlib-open').onclick = () => openLibrary();
@@ -1028,8 +1051,9 @@
           : it.arxiv || it.file || it.doi || it.children ? `<button type="button" class="zl-go primary" data-i="${i}">${esc(T.z_read)}</button>`
           : `<span class="zl-no">${esc(T.z_nofile)}</span>`;
         const tags = [it.arxiv ? 'arXiv' : '', it.file].filter(Boolean).map((x) => `<em>${esc(x)}</em>`).join('');
+        const change = it.paper && (it.file === 'PDF' || it.paper.startsWith('pdf-')) ? `<button type="button" class="zl-go" data-i="${i}">${esc(T.z_choose)}</button>` : '';
         return `<div class="zl-item"><div class="zl-tx"><div class="zl-t">${esc(it.title)}</div>` +
-          `<div class="zl-m">${esc([who, it.year].filter(Boolean).join(' · '))}${it.citekey ? ` <code>${esc(it.citekey)}</code>` : ''}${tags}</div></div>${act}</div>`;
+          `<div class="zl-m">${esc([who, it.year].filter(Boolean).join(' · '))}${it.citekey ? ` <code>${esc(it.citekey)}</code>` : ''}${tags}</div></div>${act}${change}</div>`;
       }).join('');
       box.querySelectorAll('button.zl-go').forEach((b) => { b.onclick = () => {
         const it = items[+b.dataset.i];

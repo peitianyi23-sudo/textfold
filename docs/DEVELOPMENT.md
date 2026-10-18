@@ -293,15 +293,36 @@ dropped PDF) each have their own answer.
 A Zotero library (`zotero.py`): **Zotero library**, under the landing's drop zone and at the foot of the sidebar,
 opens the library chosen (the reader's own, or a group) as Zotero shows it, its collections at the left and the items
 of the one chosen at the right, through Zotero Desktop's local API (`localhost:23119`, read only, on once the reader
-allows other applications to talk to Zotero). `POST /api/zotero/read` reads an item by the best text it has: its arXiv
-paper when it names one, handed back to the page to generate as a pasted link is; else its file (a PDF, an EPUB, a saved
-page, a Word file), where Zotero says it is or in its `storage/`, given to `take_file` as a dropped file is, with its
-DOI as the PDF's `X-Refs`; else its DOI. A file is read only when it is one TextFold reads (a PDF by its first bytes,
-any other by its name), and a file name that leaves `storage/` is not followed. `zotero.json`, in the data folder,
-says which item became which document, so the library marks what is open, and keeps the item's record: a document read
-from the item's own file takes Zotero's title, authors, date, DOI and citekey (`zotero.apply`, once it is stored), and
-lists among the papers. The page may change the library chosen and
-nothing else: Zotero's address and data folder (`"zotero": {"base", "data_dir"}`) are set in the settings file only.
+allows other applications to talk to Zotero). `POST /api/zotero/read` selects the item's PDF attachment before any
+arXiv or DOI fallback. One PDF opens directly; multiple PDFs offer a choice, remembered in `zotero.json`. The library's
+**Choose PDF attachment** button changes that choice. PDFs use only llm-for-zotero's existing MinerU cache; dropped
+PDFs and items without PDF attachments keep their previous behavior.
+
+`zotero_cache.py` owns this integration. For a stored attachment, the local API's PDF path identifies the Zotero data
+directory; linked files use `"zotero": {"data_dir"}` in `~/.textfold/settings.json`. The cache lives under that directory's
+`llm-for-zotero-mineru/`. `_llm_source.json` must match both attachment and parent keys. Since keys are library-local,
+the numeric attachment ID is checked against the selected library in a temporary read-only copy of `zotero.sqlite`
+(Zotero holds an exclusive lock on the live database). The snapshot is discarded after the lookup. No cache file or
+Zotero database is changed.
+
+Nonempty `full.md` and a readable `content_list.json` make the cache ready. The adapter maps the latter's blocks,
+LaTeX, tables and 0–1000 page coordinates to TextFold's existing document format. Images come from the cache, then
+existing figure crops; missing images are rendered from the selected PDF with the app's own pypdfium2. Rendering a
+region is not PDF parsing and needs no extra engine. The imported document keeps `source.pdf`, its page map and
+Zotero metadata, and enters the existing five-level generation queue. A previously imported document keeps its text,
+layers and annotations even when its Zotero cache disappears.
+
+Without a ready cache, the page says it is waiting, checks again every three seconds, and offers retry and cancel.
+It does not assert that a conversion is running: new PDFs may be handled by Zotero's automatic conversion; older
+attachments need the reader to start parsing in Zotero. Once ready, the selected cache opens. Closing Zotero displays
+the existing start-Zotero message and a retry button. TextFold never enqueues MinerU conversion for this path and
+hides its own reconversion button on cache imports. No refresh monitoring, versioning or automatic replacement is
+performed. Zotero's address and data directory remain settings-file-only configuration.
+
+An imported document with `source.html` opens from the sidebar immediately even before its first generated language.
+Its layer-generation progress is shown separately as background work. Reopening a cached Zotero PDF whose requested
+language's layers are already current does not enqueue generation again.
+
 `tests/test_zotero.py` runs it all against a fake Zotero.
 
 `TEXTFOLD_NO_MODELS=1` makes a server find no model at all (no agent, no bridge, no provider): for test servers and CI,

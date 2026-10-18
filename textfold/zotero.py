@@ -5,12 +5,10 @@
                                 communicate with Zotero" is on (Settings › Advanced). Read only: nothing here changes
                                 the library, and nothing goes to Zotero's servers.
 
-An item is read by the best text it has: its arXiv paper when it names one (arXiv's HTML, as any arXiv link); else its
-file (a PDF, an e-book, a saved web page, a Word file), taken as a file dropped on the landing is (server.take_file:
-the paper online when its DOI names one, else the PDF engine, else TextFold's own reading), so it is kept beside the
-paper as any original is; else its DOI, in Europe PMC. zotero.json, in the data folder, says which item became which
-document, so the library marks what is open, and keeps the item's record: a document read from the item's own file
-takes its title, authors, date, DOI and citekey from Zotero (apply), which knows them better than the file does.
+A PDF is read from the exact attachment's llm-for-zotero MinerU cache (zotero_cache.py), or waits for that cache.
+Multiple PDFs offer a remembered choice. TextFold never starts PDF parsing for this entry. An item without PDFs keeps
+the existing arXiv, other-file and DOI paths. zotero.json remembers the selection, imported document and item record;
+title, authors, date, DOI and citekey come from Zotero (apply).
 
 The library chosen is the reader's settings (~/.textfold/settings.json, "zotero": {"library"}). So are, for a Zotero
 elsewhere, its address and its data folder ("base", "data_dir"), which only that file sets: no page may point the
@@ -24,7 +22,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import engine, pdf, store
+from . import engine, pdf, pdfdoc, store, zotero_cache
 from .fetch import UA
 
 ZOTERO = "http://localhost:23119"
@@ -44,6 +42,7 @@ READS = {"application/pdf": "pdf", "application/epub+zip": "epub",
 LABEL = {"pdf": "PDF", "epub": "EPUB", "html": "HTML", "docx": "Word", "doc": "Word", "pptx": "PowerPoint",
          "xlsx": "Excel", "odt": "ODT", "rtf": "RTF"}
 _lock = threading.Lock()
+_import_lock = threading.Lock()
 
 
 class Off(RuntimeError):
@@ -173,18 +172,53 @@ def _check(lib):
 
 # ── an item, read ─────────────────────────────────────────────────────
 
-def read(lib, key):
-    """What an item is read from: {"ref", "title"} for a paper online (its arXiv id, else its DOI when it has no file),
-    or {"data", "name", "refs", "title", "record"} for its file, to be taken as a dropped file is. ValueError("no-file")
-    when it has neither."""
+def read(lib, key, attachment="", select=False):
+    """A selected PDF's imported paper, or needs=attachment/zotero-cache. select asks to choose again.
+    Without PDFs: the existing online reference or non-PDF file. Nothing here starts PDF parsing."""
     _check(lib)
     if not KEY.fullmatch(key or ""):
         raise ValueError("bad-item")
     r, _ = _get(f"{lib}/items/{key}")
     it = item_of(r)
+    attachments = _attachments(lib, key)
+    pdfs = [a for a in attachments if a["contentType"] == "application/pdf"]
+    if pdfs:
+        choices = [{"key": a["key"], "name": a.get("title") or a.get("filename") or a["key"]} for a in pdfs]
+        saved = _link_data().get(f"{lib}/{key}", {})
+        picked = attachment or ("" if select else saved.get("attachment", ""))
+        if picked and picked not in {a["key"] for a in pdfs}:
+            if attachment:
+                raise ValueError("bad-attachment")
+            picked = ""
+        if len(pdfs) > 1 and not picked:
+            return {"needs": "attachment", "attachments": choices, "selected": saved.get("attachment", ""), "title": it["title"]}
+        att = next(a for a in pdfs if a["key"] == (picked or pdfs[0]["key"]))
+        file = _file(lib, att)
+        if not file:
+            raise ValueError("no-file")
+        record = record_of(r, it)
+        record["attachment"] = att["key"]
+        # Remember the choice while waiting; switching attachments must not reopen the previous PDF.
+        link(lib, key, saved.get("paper", "") if saved.get("attachment") == att["key"] else "", it["title"], record)
+        reply = {"name": file.name, "attachment": att["key"], "attachments": choices, "title": it["title"]}
+        if saved.get("attachment") == att["key"] and saved.get("paper"):
+            pid = saved["paper"]
+            if store.valid_id(pid) and (store.pdir(pid) / "source.html").exists():
+                return {**reply, "paper": pid}
+        cached = zotero_cache.find(lib, key, att["key"], file, settings()["data_dir"])
+        if not cached:
+            return {**reply, "needs": "zotero-cache"}
+        pid = pdfdoc.pid_of(file.read_bytes())
+        with _import_lock:
+            zotero_cache.save(pid, cached, file, it["title"])
+        link(lib, key, pid, it["title"], record)
+        apply(pid)
+        return {**reply, "paper": pid}
+    if attachment:
+        raise ValueError("bad-attachment")
     if it["arxiv"]:
         return {"ref": it["arxiv"], "title": it["title"]}
-    for att in _attachments(lib, key):
+    for att in attachments:
         f = _file(lib, att)
         if f:
             name = f.name if engine.kind_of(f.name) else f"{f.name}.pdf"   # (a PDF kept under a name without .pdf)
@@ -253,8 +287,12 @@ def _links_file():
 
 
 def links():
+    return {k: v.get("paper", "") for k, v in _link_data().items()}
+
+
+def _link_data():
     try:
-        return {k: v["paper"] for k, v in json.loads(_links_file().read_text()).items()}
+        return json.loads(_links_file().read_text())
     except (OSError, ValueError, KeyError, TypeError):
         return {}
 
@@ -266,7 +304,8 @@ def link(lib, key, pid, title, record=None):
             data = json.loads(f.read_text())
         except (OSError, ValueError):
             data = {}
-        data[f"{lib}/{key}"] = {"paper": pid, "title": title, **({"record": record} if record else {})}
+        data[f"{lib}/{key}"] = {"paper": pid, "title": title, **({"record": record} if record else {}),
+                                **({"attachment": record["attachment"]} if record and record.get("attachment") else {})}
         f.parent.mkdir(parents=True, exist_ok=True)
         tmp = f.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False))
