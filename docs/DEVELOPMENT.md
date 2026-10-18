@@ -40,6 +40,12 @@ generated there, Settings, or the two menus of the landing. A paper that has not
 has, and the interface stays; nothing is generated unasked. A question is answered in the language it is asked in,
 the interface's when that is unclear.
 
+Appearance, in Settings beside the language: Follow system (the default), Light, or Dark. The choice takes effect
+immediately and stays in this browser (`pf-theme`); Follow system also responds when the system appearance changes.
+`web/theme.js` runs before the styles on the landing and reader, and is included inside exported HTML. The existing
+reader colour variables style the app and PDF controls together; original PDF canvases and figure images keep their
+white backgrounds, without inversion.
+
 Where things are kept: the code in the project (`textfold/`, with the reader's pages in `textfold/web/`); papers and exports in `papers/` and `out/` of the
 project, or wherever `TEXTFOLD_DATA` points (`PAPERFOLD_DATA`, its earlier name, is read too); settings and keys in
 `~/.textfold/`.
