@@ -331,8 +331,17 @@ layers and annotations even when its Zotero cache disappears.
 MinerU's `chart` blocks enter the same figure path as `image` blocks, using `chart_caption` and `chart_footnote`.
 This keeps plot panels and their caption formulas in the reader and its PDF page map. Already stored documents
 remain unchanged on reopening; correcting an older import requires preserving its layers' paragraph and atom references.
-Side-by-side chart panels can be separated by prose in two-column reading order. The adapter groups panels on the
-same page row with their caption and renders their complete PDF region locally, retaining cached panels as a fallback.
+The shared converter reconstructs figures before parsing or generation, using page geometry rather than two-column
+reading order. Image, chart and figure-like table blocks share one panel-ownership pass. Connected uncaptioned panels
+join a unique numbered caption; independent captioned figures stay separate, including on the same page. Author
+caption continuations are collected after the figure, while panel labels remain in its PDF crop. True tables retain
+their row and column structure. Whole-figure crops preserve the PDF arrangement, including multiple panel rows.
+
+When panel ownership is ambiguous, import continues with the relevant original PDF page explicitly marked
+"Unconfirmed figure grouping". Author captions remain visible as static figure content, outside model caption units;
+the original PDF remains available through Original. The reconstruction does not call a model or rerun extraction.
+Existing stored imports are not silently rewritten: a bounded repair must preserve healthy units and map any atom
+renumbering into retained layers before regenerating affected captions, aggregates and links.
 
 Without a ready cache, the page says it is waiting, checks again every three seconds, and offers retry and cancel.
 It does not assert that a conversion is running: new PDFs may be handled by Zotero's automatic conversion; older
