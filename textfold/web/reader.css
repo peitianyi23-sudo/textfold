@@ -790,8 +790,11 @@ html.pp-resizing, html.pp-resizing * { cursor: col-resize !important; user-selec
 html.compare .side, html.compare .lside { position: static; width: auto; flex-direction: row; flex-wrap: wrap; gap: 2px 14px; margin-top: 4px; }
 html.compare .lk, html.compare .lside .ncard { width: auto; max-width: 100%; }
 html.compare .chunk > .side, html.compare .chunk > .lside { position: static; }
-@media (max-width: 1099px) {
-  .cmpbtn, .pdfpane { display: none !important; }
+@media screen and (max-width: 1099px) {
+  /* Keep the original reachable when two reading columns would be too narrow. */
+  html.compare { overflow: hidden; }
+  .pdfpane { z-index: 50; right: 0; width: auto; }
+  .pp-grip { display: none; }
   html.compare body, html.app.compare body { padding-left: var(--rail, 0px); }
   html.compare footer.zoom, html.app.compare footer.zoom { left: var(--rail, 0px); }
 }
