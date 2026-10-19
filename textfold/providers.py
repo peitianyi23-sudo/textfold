@@ -75,7 +75,7 @@ MAX_PROVIDERS, MAX_MODELS = 12, 60
 def _read_env_file(f):
     out = {}
     if f.exists():
-        for line in f.read_text(errors="replace").splitlines():
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
             m = re.match(r"^\s*([\w.]+)\s*=\s*(.*?)\s*$", line)
             if m and not line.lstrip().startswith("#"):
                 out[m.group(1)] = m.group(2).strip().strip('"').strip("'")
@@ -133,13 +133,23 @@ def ui_providers(settings):
     return out
 
 
+def unreachable(e):
+    """Whether a probe failed because nothing answers there: a refused port, or one that stays silent (Windows is slow to
+    refuse). That is a service not running, which is no failure; an answer that is wrong is (an HTTP error, bad JSON)."""
+    if isinstance(e, urllib.error.HTTPError):
+        return False
+    reason = e.reason if isinstance(e, urllib.error.URLError) else e
+    return isinstance(reason, (OSError, TimeoutError))
+
+
 def ollama_models(base="http://localhost:11434", strict=False):
-    """What a running Ollama has pulled ([] when it is not running)."""
+    """What a running Ollama has pulled ([] when it is not running). strict: a probe that failed for another reason than
+    nothing answering raises, so the discovery keeps its last result."""
     try:
         with urllib.request.urlopen(f"{base.rstrip('/')}/api/tags", timeout=1.5) as r:
             return [m["name"] for m in json.loads(r.read()).get("models", [])]
-    except Exception:
-        if strict:
+    except Exception as e:
+        if strict and not unreachable(e):
             raise
         return []
 

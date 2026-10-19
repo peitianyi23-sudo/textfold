@@ -26,7 +26,7 @@ class Library(unittest.TestCase):
         d = store.pdir(pid)
         d.mkdir(parents=True)
         for name in ("meta.json", "source.md"):
-            (d / name).write_text("{}")
+            (d / name).write_text("{}", encoding="utf-8")
             os.utime(d / name, (at, at))
         return {"id": pid, "title": pid}
 
@@ -41,7 +41,7 @@ class Library(unittest.TestCase):
         got = library.change({"op": "move", "papers": ["wiki-en-13460"], "folder": None})
         self.assertNotIn("wiki-en-13460", got["of"])
         self.assertEqual(library.change({"op": "rename", "id": b["id"], "name": "Group"})["folders"][1]["name"], "Group")
-        self.assertEqual(json.loads(library.path().read_text())["folders"][1]["name"], "Group")
+        self.assertEqual(json.loads(library.path().read_text(encoding="utf-8"))["folders"][1]["name"], "Group")
 
     def test_imported_text_is_readable_before_levels_exist(self):
         pid = 'pdf-0123456789abcdef'
@@ -97,7 +97,7 @@ class Library(unittest.TestCase):
         self.assertEqual((d["of"], d["added"], d["opened"]), ({}, {}, {}))
 
     def test_a_damaged_file_reads_as_none(self):
-        library.path().write_text("{not json")
+        library.path().write_text("{not json", encoding="utf-8")
         self.assertEqual(library.folders(), {"folders": [], "of": {}})
 
 

@@ -158,7 +158,7 @@ class Doc:
         doc = {k: v for k, v in {**self.meta, "authors": authors or [a for a in self.meta.get("authors", []) if not NOBODY.match(a)]}.items() if v}
         sc = {"pages": self.pages, "metadata": {"file_suffix": self.ext, "producer": {"name": "textfold"}, "document": doc}}
         self.out.mkdir(parents=True, exist_ok=True)
-        (self.out / "structured_content.json").write_text(json.dumps(sc, ensure_ascii=False))
+        (self.out / "structured_content.json").write_text(json.dumps(sc, ensure_ascii=False), encoding="utf-8")
         return self.out
 
 
@@ -804,7 +804,7 @@ def _epub(path, doc):
                 return doc.picture(z.read(target), Path(target).suffix.lstrip(".").replace("jpg", "jpeg"))
             return src if re.match(r"https?://", src) else None
 
-        Flow(doc, resolve).walk(_fragment(z.read(part)))
+        Flow(doc, resolve).walk(_fragment(_decode(z.read(part))))
         doc.page()
 
 

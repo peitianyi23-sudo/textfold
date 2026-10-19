@@ -50,6 +50,30 @@ def spec_of(model):
     return resolve(model)
 
 
+def as_obj(v):
+    """A part of a model's reply that should be an object: as one, also when the model wrote it as a JSON string; else {}."""
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except ValueError:
+            return {}
+    return v if isinstance(v, dict) else {}
+
+
+def units_of(out):
+    """A reply's units as asked (a list of objects), also when a model gave them another way: an object keyed by id, a
+    JSON string, or a list of JSON strings. Anything else is dropped: its unit falls back to a local ladder."""
+    us = out.get("units") if isinstance(out, dict) else None
+    if isinstance(us, str):
+        try:
+            us = json.loads(us)
+        except ValueError:
+            return []
+    if isinstance(us, dict):
+        us = [{"id": k, **v} if isinstance(v, dict) else v for k, v in us.items()]
+    return [o for o in map(as_obj, us if isinstance(us, list) else []) if o]
+
+
 class Stopped(Exception):
     """The reader stopped a generation: the calls not yet made are skipped; those under way finish and stay cached."""
 
@@ -70,7 +94,7 @@ def call(prompt, schema, model, cache_dir: Path, force=False, timeout=900, syste
     cache_dir.mkdir(parents=True, exist_ok=True)
     f = cache_dir / f"{key}.json"
     if f.exists() and not force:
-        return json.loads(f.read_text()), True
+        return {**json.loads(f.read_text(encoding="utf-8")), "file": str(f)}, True
     note = None
     try:
         out, cost = _once(prompt, schema, spec, timeout, system)
@@ -84,8 +108,14 @@ def call(prompt, schema, model, cache_dir: Path, force=False, timeout=900, syste
     rec = {"out": out, "cost": cost, "models": [spec["id"]] + ([effort] if effort else [])}
     if note:
         rec["note"] = note
-    f.write_text(json.dumps(rec, ensure_ascii=False, indent=1))
-    return rec, False
+    f.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {**rec, "file": str(f)}, False
+
+
+def forget(rec):
+    """A kept reply its caller could not read, dropped: the next generation asks the model again, without a force."""
+    if rec.get("file"):
+        Path(rec["file"]).unlink(missing_ok=True)
 
 
 def _once(prompt, schema, spec, timeout, system):
@@ -118,9 +148,10 @@ def _claude(prompt, schema, model, effort, timeout, system=SYSTEM):
     # settings to sign in, the call is made again with them.
     with tempfile.TemporaryDirectory() as tmp:
         r = subprocess.run(cmd + ["--setting-sources", "project,local"], input=prompt, capture_output=True, text=True,
-                           timeout=timeout, env=env, cwd=tmp)
+                           encoding="utf-8", errors="replace", timeout=timeout, env=env, cwd=tmp)
         if r.returncode:
-            r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout, env=env, cwd=tmp)
+            r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=timeout, env=env, cwd=tmp)
     if r.returncode:
         raise RuntimeError(f"claude -p exited {r.returncode}: {(r.stderr or r.stdout)[-1500:]}")
     d = json.loads(r.stdout)

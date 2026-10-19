@@ -110,14 +110,14 @@ def _file(pid, name):
 
 def read(pid, name):
     f = _file(pid, name)
-    return json.loads(f.read_text()) if f.exists() else None
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
 
 
 def write(pid, name, data):
     f = _file(pid, name)
     f.parent.mkdir(parents=True, exist_ok=True)
     tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False))
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     tmp.replace(f)
 
 
@@ -172,14 +172,14 @@ def languages(pid):
 def parsed(pid):
     with SOURCE_LOCK:
         d = pdir(pid)
-        meta = json.loads((d / "meta.json").read_text())
+        meta = json.loads((d / "meta.json").read_text(encoding='utf-8'))
         f = d / "correction.json"
         if f.exists():
             meta["correction"] = json.loads(f.read_text(encoding="utf-8"))
             requested = d / "correction-request.json"
             if requested.exists():
                 meta["correction"]["requested_scope"] = json.loads(requested.read_text(encoding="utf-8"))
-        return parse((d / "source.html").read_text(), meta)
+        return parse((d / "source.html").read_text(encoding='utf-8'), meta)
 
 
 def assemble(pid, only=None):
@@ -221,7 +221,7 @@ def papers():
         mf = d / "meta.json"
         if d.name.startswith(".") or not mf.exists():
             continue
-        meta = json.loads(mf.read_text())
+        meta = json.loads(mf.read_text(encoding="utf-8"))
         en = read(d.name, "en")
         langs_ = (["en"] if en else []) + languages(d.name)
         titles = {}
@@ -234,7 +234,7 @@ def papers():
         out.append({"id": d.name, "title": meta["title"], "titles": titles, "authors": meta.get("authors", []),
                     "langs": langs_, "readable": (d / "source.html").is_file(),
                     "updated": max(mtimes) if mtimes else mf.stat().st_mtime,
-                    "notes": len(json.loads(nf.read_text()).get("notes", [])) if nf.exists() else 0,
+                    "notes": len(json.loads(nf.read_text(encoding='utf-8')).get("notes", [])) if nf.exists() else 0,
                     **({"zotero": True} if meta.get("zotero") else {})})
     return sorted(out, key=lambda p: -p["updated"])
 

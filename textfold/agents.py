@@ -69,7 +69,8 @@ def search_dirs():
         shell = os.environ.get("SHELL", "/bin/zsh")
         try:
             cmd = [shell, "-l", "-c", "string join : $PATH"] if shell.endswith("fish") else [shell, "-ilc", 'printf "%s" "$PATH"']
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=4, stdin=subprocess.DEVNULL)
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=4, stdin=subprocess.DEVNULL)
             _login_path = (r.stdout.strip().splitlines() or [""])[-1]
         except Exception:
             _login_path = ""
@@ -125,7 +126,7 @@ def argv(path):
     if not (WIN and path.lower().endswith(".cmd")):
         return [path]
     try:
-        m = _SHIM.search(Path(path).read_text(errors="replace"))
+        m = _SHIM.search(Path(path).read_text(encoding="utf-8", errors="replace"))
     except OSError:
         m = None
     script = m and Path(path).parent / m.group(1).replace("\\", os.sep)
@@ -137,7 +138,8 @@ def argv(path):
 
 
 def _run(args, timeout, **kw):
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=child_env(), stdin=subprocess.DEVNULL, **kw)
+    return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=timeout, env=child_env(), stdin=subprocess.DEVNULL, **kw)
 
 
 def _help_levels(path, flag, pattern):
@@ -161,9 +163,12 @@ def _claude_models(path):
 
 
 def _rpc(args, requests, timeout=30, cwd=None):
-    """Write JSON lines, collect the replies whose id we asked for."""
-    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                         env=child_env(), cwd=cwd or str(HOME))
+    """Write JSON lines, collect the replies whose id we asked for. When none comes back, an error that says why, in the
+    program's own words (what it wrote to stderr) when it stopped: a scan then shows it, not "0 models" (#12). The pipes
+    are UTF-8 whatever the system's codepage (a Chinese Windows would read them as cp936)."""
+    err = tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace")
+    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, text=True, encoding="utf-8",
+                         errors="replace", env=child_env(), cwd=cwd or str(HOME))
     lines = queue.Queue()   # read by a thread: select() cannot wait on a pipe on Windows
     threading.Thread(target=lambda: [*map(lines.put, p.stdout), lines.put(None)], daemon=True).start()
     got = {}
@@ -187,7 +192,14 @@ def _rpc(args, requests, timeout=30, cwd=None):
             if d.get("id") in want:
                 got[d["id"]] = d
     finally:
+        code = p.poll()   # None: still running when we stopped waiting
         p.kill()
+    if not got and any("id" in r for r in requests):
+        err.seek(0)
+        said = " ".join(err.read().split())[-300:]
+        name = Path(args[0]).name
+        raise RuntimeError(f"{name} stopped (exit {code}){': ' + said if said else ''}" if code is not None else
+                           f"{name} gave no reply in {timeout} s{': ' + said if said else ''}")
     return got
 
 
@@ -199,7 +211,7 @@ def _codex_models(path):
         {"jsonrpc": "2.0", "id": 2, "method": "model/list", "params": {}}])
     rows = (got.get(2) or {}).get("result", {}).get("data", [])
     home = Path(os.environ.get("CODEX_HOME", HOME / ".codex"))
-    m = re.search(r'^model_reasoning_effort\s*=\s*"([^"]+)"', (home / "config.toml").read_text(), re.M) if (home / "config.toml").exists() else None
+    m = re.search(r'^model_reasoning_effort\s*=\s*"([^"]+)"', (home / "config.toml").read_text(encoding="utf-8", errors="replace"), re.M) if (home / "config.toml").exists() else None
     out = []
     for r in rows:
         if r.get("hidden"):
@@ -214,7 +226,10 @@ def _codex_models(path):
 
 def _pi_models(path):
     levels = _help_levels(path, "--thinking", r"--thinking <level>\s+Set thinking level:\s*([^\n]*)")
-    got = _rpc([*argv(path), "--mode", "rpc", "--no-session"], [{"id": "1", "type": "get_available_models"}])
+    # without the extensions, skills and context files a generation runs without (run_pi): an extension Pi cannot load
+    # would stop it here, and a model only an extension adds could not be used anyway
+    got = _rpc([*argv(path), "--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates",
+                "--no-context-files"], [{"id": "1", "type": "get_available_models"}])
     data = (got.get("1") or {}).get("data")
     rows = data.get("models", []) if isinstance(data, dict) else (data or [])
     return [{"id": f"pi/{r['provider']}/{r['id']}", "name": f"Pi · {r.get('name') or r['id']}", "runtime": "pi",
@@ -227,6 +242,14 @@ CATALOG = {"claude-code": _claude_models, "codex": _codex_models, "pi": _pi_mode
 # ── the scan ──────────────────────────────────────────────────────────
 STATE = {"scanned_at": None, "scanning": False, "agents": []}
 _lock = threading.Lock()
+
+
+def wait_scanned(timeout):
+    """Wait up to timeout seconds for a scan under way to end; whether none is under way now."""
+    end = time.time() + timeout
+    while STATE["scanning"] and time.time() < end:
+        time.sleep(0.05)
+    return not STATE["scanning"]
 
 
 def scan(log=None):
@@ -321,18 +344,19 @@ def run_codex(model, prompt, schema, system, effort, timeout):
         raise RuntimeError("Codex was not found on this computer")
     with tempfile.TemporaryDirectory() as tmp:  # a scratch cwd: no repository, nothing to edit
         sf, of = Path(tmp) / "schema.json", Path(tmp) / "out.txt"
-        sf.write_text(json.dumps(_strict(schema)))
+        sf.write_text(json.dumps(_strict(schema)), encoding="utf-8")
         args = [*argv(path), "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "-m", model,
                 "--output-schema", str(sf), "-o", str(of)]
         # off is "none" (gpt-5.5 takes it, and refuses "minimal"); a model that refuses "none" runs at "low"
         for level in (["none", "low"] if effort == "off" else [effort]):
             r = subprocess.run(args + (["-c", f"model_reasoning_effort={level}"] if level else []) + ["-"], input=f"{system}\n\n{prompt}",
-                               capture_output=True, text=True, timeout=timeout, env=child_env(), cwd=tmp)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=timeout, env=child_env(), cwd=tmp)
             if not r.returncode and of.exists():
                 break
         if r.returncode or not of.exists():
             raise RuntimeError(f"codex exec exited {r.returncode}: {(r.stderr or r.stdout)[-800:]}")
-        return parse_json(of.read_text()), None
+        return parse_json(of.read_text(encoding="utf-8")), None
 
 
 def run_pi(model, prompt, schema, system, effort, timeout):
@@ -354,7 +378,8 @@ def run_pi(model, prompt, schema, system, effort, timeout):
 
 def _pi_once(args, body, schema, timeout):
     with tempfile.TemporaryDirectory() as tmp:
-        r = subprocess.run(args, input=body, capture_output=True, text=True, timeout=timeout, env=child_env(), cwd=tmp)
+        r = subprocess.run(args, input=body, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout, env=child_env(), cwd=tmp)
     text, cost = None, None
     for line in r.stdout.splitlines():
         try:
