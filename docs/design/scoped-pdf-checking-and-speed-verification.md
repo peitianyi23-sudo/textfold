@@ -82,6 +82,11 @@ The added regression test verifies that the next physical page cannot start duri
 review. The rollback suite passes 155 tests; no additional live model benchmark or zoom trace is needed for this
 scheduler-only change. No speedup is claimed for the serial configuration.
 
+Signed-off rollback commit `ec4ed8ae0f58e262992261f858c854c1bc6dffed` was fast-forward merged into `personal`.
+After confirming both queues idle and the same launcher/data ownership, the daily service restarted PID 41236 as
+12244. Model selection and the daily papers' PDF/source/notes/layer bytes are unchanged. The receipt is
+`launch/scoped-pdf/daily-service-serial.json` in the retained managed worktree.
+
 ## Quality finding and correction
 
 An initial proposal contained Johnson's missing label (4), causing the redundant-restoration request to be skipped.
