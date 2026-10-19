@@ -371,7 +371,8 @@ pages of a continuation; numbered displays also use the actual full-page compari
 checkpoints reviewed results. `correction-request.json` keeps the latest explicit selection separately so an old
 worker cannot overwrite it. Switching scopes stops the old job's scheduling, retains reviewed pages and prioritizes
 the new selection through the single generation worker. Returned first comparisons survive in
-`correction-proposals/`; only an identical extraction context permits reuse, and proposed edits still need independent
+`correction-proposals/`; an unchanged local context inside the saved context permits reuse only when every proposed
+edit anchor is still present. Proposed edits still need independent
 review. Provider failure is unfinished checking. A process restart retains these files, but does not start model
 jobs on its own: **Continue selected range** resumes explicitly.
 
@@ -440,11 +441,17 @@ PDF correction runs one request at a time: each physical page's full comparison 
 before the next page starts. Multi-request experiments did not establish an overall speedup and were rolled back
 to serial checking at the user's request. Reading-order text anchors
 localize Markdown even when it came from a finalized cache without block coordinates; scans can use extractor
-blocks, and an unmapped page keeps full context. Parallel comparisons share a snapshot; exact replacements are
+blocks, and an unmapped page keeps full context. Distant running-header/citation matches are separated from the
+main page-anchor group so a four-word bibliography match cannot pull the entire document into a page request.
+Comparisons use a batch snapshot; exact replacements are
 resolved against the current draft before publication. Changed paragraphs/equations are independently checked
 using context crops. A numbered-display inventory also checks for missing equations and labels. PDF/cache originals
 are untouched. `correction.json` records request stages/durations, mapping, rendering, validation and wall time;
 provider failure remains an unfinished check, with a resumable page checkpoint.
+
+Visual requests retry transient HTTP 429/500/502/503/504/529 failures with the same image payload, using the existing
+bounded backoff. Stop interrupts retry waits and prevents another request. Progress names the current page and
+comparison/review stage, or the HTTP status and retry wait; `timing.requests[*].retries` retains retry evidence.
 
 Display equations participate in the section's progressive compression. `chunks[*].lad.equations` stores source
 block ids, separate `key` and `takeaway` decisions (Takeaway is a subset), meaning and necessary conditions.
