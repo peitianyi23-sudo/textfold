@@ -413,6 +413,21 @@ found unlawful without consent in 2022.)
 
 ## Smoothness is a rule
 
+PDF correction compares every physical page, with two page comparisons in flight. Reading-order text anchors
+localize Markdown even when it came from a finalized cache without block coordinates; scans can use extractor
+blocks, and an unmapped page keeps full context. Parallel comparisons share a snapshot; exact replacements are
+resolved against the current draft before publication. Changed paragraphs/equations are independently checked
+using context crops. A numbered-display inventory also checks for missing equations and labels. PDF/cache originals
+are untouched. `correction.json` records request stages/durations, mapping, rendering, validation and wall time;
+provider failure remains an unfinished check, with a resumable page checkpoint.
+
+Display equations participate in the section's progressive compression. `chunks[*].lad.equations` stores source
+block ids, separate `key` and `takeaway` decisions (Takeaway is a subset), meaning and necessary conditions.
+Translations keep those decisions and translate the explanations. The reader displays selected original equation
+HTML directly at Key/Takeaway, including long formulas and author numbers; author rows stay intact and wider
+formulas scroll within their own block. Topic stays unchanged. Existing layers acquire selection when regenerated;
+opening a paper does not regenerate the library.
+
 No change may make the zoom less smooth. Measure before and after with the GPU at 2x pixels, reading the frames the
 screen actually showed, on a dense paper (2512.23916):
 

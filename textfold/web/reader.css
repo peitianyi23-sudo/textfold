@@ -294,15 +294,19 @@ figure.fig[data-l="0"] .flabel { font-weight: 600; color: var(--muted); }
 .fbody .ltx_transformed_outer { width: auto !important; height: auto !important; vertical-align: initial !important; }
 .fbody .ltx_transformed_inner { transform: none !important; }
 
-.eq { overflow-x: auto; margin: 6px 0 16px; font-size: 17px; }
+.eq { margin: 6px 0 16px; font-size: 17px; max-width: 100%; }
+.eq-body { overflow-x: auto; max-width: 100%; overscroll-behavior-x: contain; }
 .raw { margin: 0 0 14px; font-family: var(--serif); color: var(--ink-2); }
 .raw pre { font-family: var(--mono); font-size: 13px; line-height: 1.55; overflow-x: auto; margin: 0; padding: 10px 12px;
   background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
 .pf-missing { font-family: var(--sans); font-size: 13px; color: var(--muted); }
 /* each block carries its own level, so far-away ones can follow a level change later (reader.js renderAll) */
-.eq[data-l="2"], .eq[data-l="1"], .eq[data-l="0"], .raw[data-l="2"], .raw[data-l="1"], .raw[data-l="0"],
+.eq[data-l="2"]:not([data-key="1"]), .eq[data-l="1"]:not([data-takeaway="1"]), .eq[data-l="0"], .raw[data-l="2"], .raw[data-l="1"], .raw[data-l="0"],
 .front[data-l="2"], .front[data-l="1"], .front[data-l="0"],
 .doc:not([data-level="4"]) .bib { display: none; }
+.eq-meaning { display: none; font: 14px/1.5 var(--sans); color: var(--ink-2); white-space: normal; }
+.eq[data-l="2"] .eq-meaning, .eq[data-l="1"] .eq-meaning { display: block; margin-top: 8px; }
+.eq table { max-width: none; } /* preserve author rows and numbering; overflow stays formula-local */
 .bib { margin-top: 48px; font-family: var(--serif); font-size: 14.5px; color: var(--ink-2); }
 .bib summary { font-family: var(--sans); font-size: 20px; font-weight: 700; color: var(--ink); cursor: pointer; margin-bottom: 10px; }
 .bib .ltx_biblist { list-style: none; padding: 0; }

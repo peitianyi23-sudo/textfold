@@ -78,17 +78,18 @@ class CorrectionTests(unittest.TestCase):
 
     def test_all_pages_checked_and_edited_page_verified_before_publication(self):
         correction.queue(PID)
-        replies = [
-            {"edits": [{"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "PDF"}], "issues": []},
-            {"decisions": [{"index": 0, "verdict": "accept", "reason": "PDF shows turbulent"}]},
-            {"edits": [], "issues": []},
-            {"edits": [], "issues": ["Page 2: symbol cannot be distinguished"]},
-        ]
-        with patch.object(llm_openai, "vision", side_effect=replies) as call:
+        def reply(prompt, schema, spec, images):
+            if schema is correction.REVIEW:
+                return {"decisions": [{"index": 0, "verdict": "accept", "reason": "PDF shows turbulent"}]}
+            if "physical PDF page 1" in prompt:
+                return {"edits": [{"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "PDF"}], "issues": []}
+            return {"edits": [], "issues": ["Page 2: symbol cannot be distinguished"]}
+        with patch.object(llm_openai, "vision", side_effect=reply) as call:
             correction.run(PID, SPEC)
-        self.assertEqual(call.call_count, 4)
-        self.assertIn("verification pass", call.call_args_list[2].args[0])
-        self.assertIn("A turbulent flow.", call.call_args_list[2].args[0])
+        self.assertEqual(call.call_count, 3)
+        review_call = next(c for c in call.call_args_list if c.args[1] is correction.REVIEW)
+        self.assertIn("corrected result", review_call.args[0])
+        self.assertIn("A turbulent flow.", review_call.args[0])
         s = correction.state(PID)
         self.assertEqual((s["done"], s["total"], s["status"]), (2, 2, "done"))
         self.assertEqual(s["issues"][0]["page"], 2)
@@ -105,9 +106,48 @@ class CorrectionTests(unittest.TestCase):
         self.assertEqual(correction.state(PID)["status"], "error")
         self.assertEqual((self.d / "source.md").read_text(encoding="utf-8"), self.md)
 
+    def test_parallel_overlap_is_relocated_in_current_context_without_overwriting_reviewed_edit(self):
+        correction.queue(PID)
+        edit = {"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "PDF"}
+        def reply(prompt, schema, spec, images):
+            if schema is correction.REVIEW:
+                return {"decisions": [{"index": 0, "verdict": "accept", "reason": "Printed turbulent"}]}
+            if "Region verification pass" in prompt:
+                current = prompt.split("CURRENT extraction:\n", 1)[1]
+                self.assertIn("A turbulent flow.", current)
+                self.assertNotIn("Broken turbuð Þlent flow.", current)
+                return {"edits": [], "issues": []}
+            return {"edits": [edit], "issues": []}
+        with patch.object(llm_openai, "vision", side_effect=reply):
+            correction.run(PID, SPEC)
+        self.assertEqual(correction.state(PID)["edits"], 1)
+        self.assertIn("A turbulent flow.", (self.d / "source.md").read_text(encoding="utf-8"))
+
+    def test_missing_numbered_display_gets_region_restoration_and_independent_review(self):
+        correction.queue(PID)
+        def reply(prompt, schema, spec, images):
+            if schema is correction.REVIEW:
+                return {"decisions": [{"index": 0, "verdict": "accept", "reason": "All terms and number match"}]}
+            if "Restore the following numbered" in prompt:
+                return {"edits": [{"before": "Broken turbuð Þlent flow.",
+                    "after": "Broken turbuð Þlent flow.\n\n$$x=y \\tag{10}$$", "reason": "Missing printed result"}], "issues": []}
+            if "physical PDF page 1" in prompt:
+                return {"edits": [], "issues": [], "displays": [{"number": "10", "present": False, "box": [.1,.3,.9,.6]}]}
+            return {"edits": [], "issues": []}
+        with patch.object(llm_openai, "vision", side_effect=reply):
+            correction.run(PID, SPEC)
+        self.assertIn(r"\tag{10}", (self.d / "source.md").read_text(encoding="utf-8"))
+        stages = {r["stage"] for r in correction.state(PID)["timing"]["requests"]}
+        self.assertIn("missing-display-regions", stages)
+        self.assertIn("independent-region-review", stages)
+
     def test_resume_skips_completed_pages_and_publishes_only_after_all_pages(self):
         correction.queue(PID)
-        with patch.object(llm_openai, "vision", side_effect=[{"edits": [], "issues": []}, RuntimeError("offline")]):
+        def reply(prompt, *args):
+            if "physical PDF page 1" in prompt:
+                return {"edits": [], "issues": []}
+            raise RuntimeError("offline")
+        with patch.object(llm_openai, "vision", side_effect=reply):
             with self.assertRaises(RuntimeError):
                 correction.run(PID, SPEC)
         self.assertEqual(correction.state(PID)["done"], 1)
@@ -163,7 +203,7 @@ class CorrectionTests(unittest.TestCase):
         self.assertEqual(len([b for b in doc["blocks"] if b["k"] == "eq"]), 1)
 
     def test_bridge_uses_real_image_responses_and_rejects_incomplete_results(self):
-        result = {"status": "completed", "output": [{"content": [{"type": "output_text", "text": '{"edits": [], "issues": []}'}]}]}
+        result = {"status": "completed", "output": [{"content": [{"type": "output_text", "text": '{"edits": [], "issues": [], "displays": []}'}]}]}
         with patch.object(llm_openai, "_post", return_value=result) as post:
             llm_openai.vision("check", correction.SCHEMA, SPEC, [b"page pixels"])
         url, body, _, _ = post.call_args.args

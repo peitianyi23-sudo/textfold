@@ -121,7 +121,10 @@ def tex_math(latex, display=False):
     latex = latex.strip()
     try:
         from latex2mathml.converter import convert
-        m = BeautifulSoup(convert(latex, display="block" if display else "inline"), "lxml").find("math")
+        # This converter flattens aligned rows and prints '&' as a symbol. Its array path
+        # supports the same right/left alignment and row separators; keep the source intact.
+        layout = latex.replace(r"\begin{aligned}", r"\begin{array}{rl}").replace(r"\end{aligned}", r"\end{array}")
+        m = BeautifulSoup(convert(layout, display="block" if display else "inline"), "lxml").find("math")
     except Exception:
         m = None
     if m is None:

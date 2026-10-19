@@ -1,12 +1,12 @@
-"""Each unit's ladder: Full ⊃ Key ⊃ Brief ⊃ Takeaway ⊃ Topic.
+"""Each unit's ladder: Full ⊃ Brief ⊃ Key ⊃ Takeaway ⊃ Topic.
 
 Same split as ThoughtDAG's ladder (src/lib/ladder.ts), for the same reason:
 a model told to only delete words paraphrases anyway, and pure deletion
 leaves the short levels meaningless. So:
   Full      the unit as the author wrote it
-  Key       1 to 3 of its sentences, VERBATIM, chosen by the model as evidence
-  Brief     takeaway + one sentence of reason, WRITTEN
-  Takeaway  a headline sentence, WRITTEN (Brief starts with it)
+  Brief     1 to 3 of its sentences, VERBATIM, chosen by the model as evidence
+  Key       takeaway + one sentence of reason, WRITTEN
+  Takeaway  a headline sentence, WRITTEN (Key starts with it)
   Topic     a noun phrase, cut from inside the takeaway when the model's
             phrase is there verbatim, else the model's phrase as written
 Written words that also occur in the key sentences carry `m`, the index of
@@ -16,7 +16,7 @@ One model call per chunk (a heading and the units under it).
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from . import kinds, llm
+from . import equations, kinds, llm
 from .tokens import lcs_pairs, norm, plain, tokenize_text, words
 
 ROLES = ["context", "gap", "claim", "method", "setup", "result", "analysis", "limitation"]
@@ -25,8 +25,8 @@ BUDGET = {"takeaway": 14, "reason": 22, "topic": 3, "section": 16}
 SCHEMA = {
     "type": "object",
     "properties": {
-        "section": {"type": "object", "properties": {"takeaway": {"type": "string"}, "topic": {"type": "string"}},
-                    "required": ["takeaway", "topic"]},
+        "section": {"type": "object", "properties": {"takeaway": {"type": "string"}, "topic": {"type": "string"}, "equations": equations.SELECTION},
+                    "required": ["takeaway", "topic", "equations"]},
         "units": {"type": "array", "items": {"type": "object", "properties": {
             "id": {"type": "string"}, "role": {"type": "string", "enum": ROLES},
             "takeaway": {"type": "string"}, "topic": {"type": "string"}, "reason": {"type": "string"},
@@ -83,8 +83,7 @@ def prompt_for(doc, chunk):
     head = f"{chunk['num']} {chunk['title']}".strip()
     tables = tables_of(doc, chunk)
     context = ("\n\nTables in this section, for context (they are not units; a takeaway may use what they show):\n\n" + "\n\n".join(tables)) if tables else ""
-    from . import correction
-    context += correction.equations(doc, {chunk["id"]})
+    context += equations.prompt(doc, chunk)
     return kinds.adapt(f"""Paper: {doc['meta']['title']}
 
 Paper abstract, for context:
@@ -99,7 +98,7 @@ Its units in reading order. A unit is a paragraph, a list item, or a figure or t
 
 {chr(10).join(blocks)}{context}
 
-A reader zooms out of this paper level by level: full text, then key sentences, then brief, then takeaway, then topic. Write the short levels for every unit, and one takeaway for the whole section.
+A reader zooms out of this paper level by level: Full, Brief (author sentences), Key (takeaway plus reason), Takeaway (headline), Topic. Write the short levels for every unit, and one takeaway for the whole section.
 
 For each unit:
 - role: the unit's job in the paper's argument, one of: context (background, prior work), gap (what prior work lacks or gets wrong), claim (a thesis or hypothesis the paper puts forward), method (what the authors built or how it works), setup (data, parameters, protocol), result (a measured finding), analysis (an interpretation, mechanism or theory), limitation (a caveat or future work).
@@ -247,11 +246,14 @@ def section_ladder(o, topic_budget=3, doc=None, chunk=None):
         take = written(take_text, {"toks": pool, "sents": []}, doc["atoms"], [])
     else:
         take = tokenize_text(take_text)
-    return {"take": take, "topic": locate(clean(o.get("topic")), take) or head_words(take, topic_budget)}
+    result = {"take": take, "topic": locate(clean(o.get("topic")), take) or head_words(take, topic_budget)}
+    if doc and chunk:
+        result["equations"] = equations.selected(doc, chunk, o.get("equations"))
+    return result
 
 
 def build(doc, cfg, cache_dir, jobs=4, log=print, progress=None, force=False, stop=None, only=None):
-    chunks = [c for c in doc["chunks"] if c["units"] and (only is None or c["id"] in only)]
+    chunks = [c for c in doc["chunks"] if (c["units"] or equations.inventory(doc, c)) and (only is None or c["id"] in only)]
     cost, warnings, errors = 0.0, [], []
     model = llm.label(cfg)
 
@@ -259,7 +261,12 @@ def build(doc, cfg, cache_dir, jobs=4, log=print, progress=None, force=False, st
         if stop is not None and stop.is_set():   # stopped: the chunks not yet sent are skipped
             return c, None, llm.Stopped()
         try:
-            return c, llm.call(prompt_for(doc, c), SCHEMA, cfg, cache_dir, force, system=llm.system_for(doc["meta"])), None
+            res = llm.call(prompt_for(doc, c), SCHEMA, cfg, cache_dir, force, system=llm.system_for(doc["meta"]))
+            expected = {e["id"] for e in equations.inventory(doc, c)}
+            rows = (res[0]["out"].get("section") or {}).get("equations", [])
+            if expected and (len(rows) != len(expected) or {r.get("id") for r in rows} != expected):
+                raise RuntimeError("Missing display-equation importance decisions for " + c["id"])
+            return c, res, None
         except Exception as e:  # one failed chunk falls back to local ladders, the rest still build
             return c, None, e
 
@@ -272,6 +279,8 @@ def build(doc, cfg, cache_dir, jobs=4, log=print, progress=None, force=False, st
             if stop is not None and stop.is_set():
                 raise llm.Stopped()
             if err:
+                if equations.inventory(doc, c):
+                    raise RuntimeError(f"Equation selection failed for {c['id']}: {err}")
                 errors.append(err)
                 log(f"  ! {c['id']}: {err}")
                 continue

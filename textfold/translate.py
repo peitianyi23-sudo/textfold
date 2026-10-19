@@ -10,9 +10,10 @@ because a reply that long comes back with its last paragraphs missing (seen with
 parallel. The section's own lines come with the first part.
 """
 import re
+import json
 from concurrent.futures import ThreadPoolExecutor
 
-from . import kinds, langs, llm
+from . import equations, kinds, langs, llm
 from .ladder import KIND, align, clean, outline, section_ladder, topic_tokens, written
 from .tokens import plain
 
@@ -21,7 +22,7 @@ SCHEMA = {
     "properties": {
         "paper_title": {"type": "string"},
         "section": {"type": "object", "properties": {"title": {"type": "string"}, "takeaway": {"type": "string"},
-                                                      "topic": {"type": "string"}}, "required": ["title", "takeaway", "topic"]},
+                                                      "topic": {"type": "string"}, "equations": equations.SELECTION}, "required": ["title", "takeaway", "topic"]},
         "units": {"type": "array", "items": {"type": "object", "properties": {
             "id": {"type": "string"}, "sentences": {"type": "array", "items": {"type": "string"}},
             "takeaway": {"type": "string"}, "reason": {"type": "string"}, "topic": {"type": "string"}},
@@ -70,6 +71,8 @@ Outline (▶ marks this section):
 
 This section: {head}
 English section takeaway: {plain(sec['take'], A) if sec else ''}
+Selected display equations: {json.dumps((sec or {}).get('equations', []), ensure_ascii=False)}
+Translate their meaning and conditions in section.equations. Copy id, key, takeaway unchanged; retain every validity condition. Do not translate or rewrite the equation itself.
 
 Each unit (a paragraph, list item or caption) lists its numbered English sentences, then the English short levels already written for it.
 
@@ -198,6 +201,12 @@ def build(doc, lang, cfg, cache_dir, jobs=4, log=print, progress=None, force=Fal
                 title = (unmark(clean(sec.get("title")), doc["atoms"]) or c["title"]) if c["title"] else ""
                 c.setdefault("tr", {})[lang] = {"title": title,
                                                  "lad": section_ladder(sec, langs.budget(lang)["topic"], doc, c)}
+                translated_lad = c["tr"][lang]["lad"]
+                if translated_lad:
+                    translated = {r["id"]: r for r in translated_lad.get("equations", [])}
+                    translated_lad["equations"] = [
+                        {**row, **{k: translated.get(row["id"], row)[k] for k in ("meaning", "conditions")}}
+                        for row in (c.get("lad") or {}).get("equations", [])]
                 if out.get("paper_title"):
                     meta["titles"][lang] = clean(out["paper_title"])
             log(f"  {'·' if cached else '✓'} {lang} {c['id']:<14} {len(us):>2} units{f' (part {k + 1})' if k else ''}")

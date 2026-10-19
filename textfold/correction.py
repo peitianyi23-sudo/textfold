@@ -9,6 +9,8 @@ import io
 import json
 import re
 import shutil
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -19,9 +21,14 @@ from .tokens import plain
 
 SCHEMA = {"type": "object", "properties": {
     "edits": {"type": "array", "items": {"type": "object", "properties": {
-        "before": {"type": "string"}, "after": {"type": "string"}, "reason": {"type": "string"}},
+        "before": {"type": "string"}, "after": {"type": "string"}, "reason": {"type": "string"},
+        "box": {"type": "array", "items": {"type": "number"}}},
         "required": ["before", "after", "reason"]}},
-    "issues": {"type": "array", "items": {"type": "string"}}}, "required": ["edits", "issues"]}
+    "issues": {"type": "array", "items": {"type": "string"}},
+    "displays": {"type": "array", "items": {"type": "object", "properties": {
+        "number": {"type": "string"}, "present": {"type": "boolean"},
+        "box": {"type": "array", "items": {"type": "number"}}},
+        "required": ["number", "present", "box"]}}}, "required": ["edits", "issues", "displays"]}
 REVIEW = {"type": "object", "properties": {"decisions": {"type": "array", "items": {
     "type": "object", "properties": {"index": {"type": "integer"},
     "verdict": {"type": "string", "enum": ["accept", "reject", "unresolved"]},
@@ -262,6 +269,30 @@ def publish(pid, text, s):
     s["affected"] = sorted(c for c in affected if c)
 
 
+def page_ranges(text, page_texts):
+    """Align reading-order text anchors once, including finalized Markdown without coordinates.
+
+    Unmapped pages keep the full extraction: coverage takes precedence over payload size.
+    Overlapping paragraph context covers page continuations; edits still need unique locators.
+    """
+    tokens = list(re.finditer(r"[a-zA-Z]{3,}", text.lower()))
+    source = [m[0] for m in tokens]
+    out = []
+    for page in page_texts:
+        words = re.findall(r"[a-zA-Z]{3,}", page.lower())
+        matches = difflib.SequenceMatcher(None, source, words, autojunk=False).get_matching_blocks()
+        hits = [b for b in matches if b.size >= 4]
+        if not hits:
+            out.append((0, len(text)))
+            continue
+        first = tokens[min(b.a for b in hits)].start()
+        last = tokens[max(b.a + b.size - 1 for b in hits)].end()
+        start = text.rfind("\n\n", 0, max(0, first - 700))
+        end = text.find("\n\n", min(len(text), last + 700))
+        out.append((max(0, start), len(text) if end < 0 else end))
+    return out
+
+
 def run(pid, spec, progress=lambda *a: None, stop=None):
     s = state(pid)
     if not s or s["status"] == "done":
@@ -272,113 +303,209 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
         "text": (d / "source.md").read_text(encoding="utf-8"), "page": 0, "history": [], "issues": []}
     import pypdfium2 as pdfium
     from .engine import PDFIUM
+    started = time.perf_counter()
+    metrics = {"requests": [], "render_seconds": 0., "validation_seconds": 0., "mapping_seconds": 0.}
+    original = (d / "source.md").read_text(encoding="utf-8")
+    image_map = _images(original, (d / "source.html").read_text(encoding="utf-8"))
     with PDFIUM:
         pdf = pdfium.PdfDocument(str(d / "source.pdf"))
         total = len(pdf)
+    def check():
+        if stop is not None and stop.is_set():
+            raise llm.Stopped()
+    def request(prompt, schema, images, page, stage):
+        check()
+        now = time.perf_counter()
+        rec = {"page": page + 1, "stage": stage, "prompt_chars": len(prompt), "images": len(images)}
+        try:
+            return llm_openai.vision(prompt, schema, spec, images)
+        except Exception as e:
+            rec["error"] = str(e)
+            raise
+        finally:
+            rec["seconds"] = time.perf_counter() - now
+            metrics["requests"].append(rec)
+    def picture(page):
+        now = time.perf_counter()
+        with PDFIUM:
+            p = pdf[page]
+            bitmap = p.render(scale=2.4)
+            try:
+                result = bitmap.to_pil().convert("RGB").copy()
+            finally:
+                bitmap.close(); p.close()
+        metrics["render_seconds"] += time.perf_counter() - now
+        return result
+    def png(image):
+        buf = io.BytesIO(); image.save(buf, format="PNG"); return buf.getvalue()
     try:
+        now = time.perf_counter()
+        pages = []
+        with PDFIUM:
+            for index in range(total):
+                p = pdf[index]; tp = p.get_textpage()
+                try: pages.append(tp.get_text_range())
+                finally: tp.close(); p.close()
+        # A scan can use the extractor's reading-order blocks without any text layer.
+        sf = d / "structured_content.json"
+        if sf.exists():
+            sc = json.loads(sf.read_text(encoding="utf-8"))
+            for n, page in enumerate(sc.get("pages", [])):
+                i = page.get("page_idx", n)
+                if i < total and not pages[i].strip():
+                    pages[i] = " ".join(str(b.get("content", "")) for b in page.get("blocks", []))
+        snapshot = draft["text"]
+        history_start = len(draft["history"])
+        ranges = page_ranges(snapshot, pages)
+        metrics["mapping_seconds"] = time.perf_counter() - now
         s.update(status="checking", done=draft["page"], total=total, error="")
         _write(d, "correction.json", s)
-        for page in range(draft["page"], total):
-            progress("PDF 校对中", page, total)
-            images = []
-            detail_images = []
-            indexes = range(max(0, page - 1), min(total, page + 2))
-            for index in indexes:
-                with PDFIUM:
-                    p = pdf[index]
-                    bitmap = p.render(scale=2.4)
-                    try:
-                        buf = io.BytesIO()
-                        picture = bitmap.to_pil().convert("RGB")
-                        picture.save(buf, format="PNG")
-                        images.append(buf.getvalue())
-                        if index == page:
-                            width, height = picture.size
-                            for box in ((0, 0, width * .55, height * .55), (width * .45, 0, width, height * .55),
-                                        (0, height * .45, width * .55, height), (width * .45, height * .45, width, height)):
-                                crop = io.BytesIO()
-                                picture.crop(tuple(int(v) for v in box)).save(crop, format="PNG")
-                                detail_images.append(crop.getvalue())
-                    finally:
-                        bitmap.close()
-                        p.close()
-            feedback = ""
-            uncertain = {}
-            for attempt in range(3):
-                if stop is not None and stop.is_set():
-                    raise llm.Stopped()
-                prompt = (f"Check physical PDF page {page + 1} of {total} in full: prose, all formulas, tables, "
-                          f"captions and paragraph order. Images in order show pages {[i + 1 for i in indexes]}; "
-                          "neighbor pages supply context and paragraph continuations. Compare the current extraction below "
-                          "directly with those images. Correct OCR, math/text boundaries, broken words and paragraph "
-                          "boundaries; retain the author's words and symbols. Do not rewrite, summarize, modernize notation "
-                          "or correct the author's science. Ignore running headers, footers, publisher stamps and page numbers, "
-                          "which the reading copy intentionally omits. Preserve image paths and figure HTML. Avoid whitespace-only "
-                          "LaTeX changes. Before each edit, locate the difference visibly in the PDF. Return edits as exact, "
-                          "unique substrings of the CURRENT extraction (before), the corrected Markdown (after), and a "
-                          "specific PDF-grounded reason. Include enough unchanged context to make before unique. "
-                          "An empty edits array means no further evidenced change. Report unresolved regions in issues, "
-                          "including their page and quoted context; never guess. "
-                          + ("This is a verification pass: re-read the corrected result against the images, including each "
-                             "changed formula and its surrounding paragraph. Look for remaining errors and introduced "
-                             "omissions, not agreement with a previous model response. " if attempt else "") +
-                          feedback + "\n\nCURRENT extraction:\n" + draft["text"])
-                result = llm_openai.vision(prompt, SCHEMA, spec, images)
-                edits = result["edits"]
-                draft["issues"] = [x for x in draft["issues"] if x["page"] != page + 1]
-                draft["issues"].extend({"page": page + 1, "text": x} for x in result["issues"])
-                if not edits:
-                    break
-                text, accepted, rejected = draft["text"], [], []
-                for edit in edits:
-                    if edit["before"] == edit["after"]:
-                        continue
-                    try:
-                        candidate = patches(text, [edit])
-                        render(candidate, _images((d / "source.md").read_text(encoding="utf-8"),
-                                                  (d / "source.html").read_text(encoding="utf-8")))
-                        text = candidate
-                        accepted.append(edit)
-                    except ValueError as e:
-                        rejected.append({"before": edit["before"], "error": str(e)})
-                accepted, review_issues = review(accepted, images + detail_images, spec,
-                    f"{[i + 1 for i in indexes]} in order, followed by four enlarged overlapping quadrants "
-                    f"(top left, top right, bottom left, bottom right) of page {page + 1}")
-                text = patches(draft["text"], accepted)
-                for issue in review_issues:
-                    if issue["verdict"] == "unresolved":
-                        uncertain[issue["before"]] = issue["reason"]
+        def first(page):
+            check()
+            image = picture(page)
+            a, b = ranges[page]
+            local = snapshot[a:b]
+            prompt = (f"Check physical PDF page {page + 1} of {total} IN FULL: every paragraph, formula, caption, "
+                "table and reading-order transition. The image is this page. The extraction below includes surrounding "
+                "paragraph context. Correct only differences visible on THIS page, preserving printed author symbols "
+                "even if scientifically inconsistent. Ignore running headers, footers, stamps and page numbers. "
+                "Preserve image paths/HTML; avoid whitespace-only LaTeX edits. Return exact UNIQUE before substrings "
+                "with enough unchanged context, corrected Markdown after, and PDF evidence reason. For each edit "
+                "give box=[left,top,right,bottom] in 0..1 image coordinates covering the entire changed paragraph or "
+                "equation INCLUDING its number, not just one symbol. Explicitly restore omitted displays by inserting "
+                "them at a unique surrounding text anchor. Preserve EVERY printed equation number using \\tag{n}. "
+                "displays: inventory EVERY numbered display visible on this page, with number, box covering the whole "
+                "equation, and present=true only if the CURRENT extraction includes every line AND the number. "
+                "Do not count prose references to equations as displays. A readable missing number or equation needs "
+                "an edit, not just an issue. "
+                "A page-spanning change must be reported as an issue unless the visible evidence establishes it. "
+                "If source content for this page is missing from the context, report it in issues; never claim agreement. "
+                "Report only real extraction omissions or unreadable/ambiguous regions in issues; never infer from "
+                "physics. Context outside this page is expected, not an issue. Do not report absence of captions/tables "
+                "on a page that has none.\nCURRENT extraction:\n" + local)
+            return request(prompt, SCHEMA, [png(image)], page, "full-page"), image, local
+        # Only two first comparisons in flight; do not queue a whole library of model requests.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pending = {}
+            begin = draft["page"]
+            for page in range(begin, min(total, begin + 2)):
+                pending[page] = pool.submit(first, page)
+            for page in range(begin, total):
+                progress("PDF 校对中", page, total)
+                result, image, local = pending.pop(page).result()
+                check()
+                for change in draft["history"][history_start:]:
+                    for edit in change["edits"]:
+                        if edit["before"] in local:
+                            local = local.replace(edit["before"], edit["after"], 1)
+                missing = [r for r in result.get("displays", []) if not r["present"]]
+                if missing:
+                    # Explicit inventory prevents a readable omitted display being left as a vague issue.
+                    crops = []
+                    for r in missing:
+                        box = r["box"]
+                        if len(box) != 4 or not (0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1):
+                            box = [0, 0, 1, 1]
+                        w, h = image.size
+                        crops.append(png(image.crop((int(max(0,box[0]-.05)*w), int(max(0,box[1]-.05)*h),
+                                                    int(min(1,box[2]+.05)*w), int(min(1,box[3]+.05)*h)))))
+                    extra = request("Restore the following numbered display equations, including every line and printed "
+                        "number as \\tag{n}, from the supplied original PDF regions. They were inventoried as incomplete "
+                        "in CURRENT extraction. Return exact unique insertion/replacement anchors. Do not repeat edits "
+                        "already proposed below. Preserve author symbols; if unreadable, report the exact ambiguity. "
+                        "Copy each region's original full-page box into its proposed edit.\n"+
+                        json.dumps({"displays":missing,"already_proposed":result["edits"]},ensure_ascii=False)+
+                        "\nCURRENT extraction:\n"+local,SCHEMA,crops,page,"missing-display-regions")
+                    result["edits"].extend(extra["edits"])
+                    result["issues"].extend(extra["issues"])
+                feedback = []
+                for attempt in range(3):
+                    candidates, rejected = [], []
+                    # Simultaneous comparisons share a snapshot. Resolve overlaps against the current draft,
+                    # never apply an offset calculated before a different page changed the same passage.
+                    text = draft["text"]
+                    for edit in result["edits"]:
+                        if edit["before"] == edit["after"]:
+                            continue
+                        try:
+                            candidate = patches(text, [edit])
+                            # Enforce page-local ownership even when a passage is unique elsewhere.
+                            if edit["before"] not in local:
+                                raise ValueError("Proposed change lies outside this page's supplied extraction")
+                            text = candidate; candidates.append(edit)
+                        except ValueError as e:
+                            rejected.append({"before": edit["before"], "error": str(e)})
+                    draft["issues"] = [x for x in draft["issues"] if x["page"] != page + 1]
+                    draft["issues"].extend({"page": page + 1, "text": x} for x in result["issues"])
+                    if not candidates and not rejected:
+                        break
+                    crops = []
+                    for e in candidates:
+                        box = e.get("box", [])
+                        if len(box) != 4 or not (0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1):
+                            box = [0, 0, 1, 1]
+                        # Include surrounding lines, not just the symbol claimed to be wrong.
+                        w, h = image.size
+                        box = [max(0, box[0]-.04), max(0, box[1]-.04), min(1, box[2]+.04), min(1, box[3]+.04)]
+                        crops.append(png(image.crop((int(box[0]*w), int(box[1]*h), int(box[2]*w), int(box[3]*h)))))
+                    if candidates:
+                        now = time.perf_counter()
+                        rec = {"page":page+1,"stage":"independent-region-review","images":len(crops)}
+                        try:
+                            accepted, review_issues = review(candidates, crops, spec,
+                                f"{page+1}, one context crop per indexed edit; check the corrected result against the printed region")
+                        except Exception as e:
+                            rec["error"] = str(e)
+                            raise
+                        finally:
+                            rec["seconds"] = time.perf_counter()-now
+                            metrics["requests"].append(rec)
+                        feedback = review_issues
+                        if review_issues:
+                            draft.setdefault("reviews", []).append({"page": page+1, "issues": review_issues})
+                        if accepted:
+                            now = time.perf_counter()
+                            candidate = patches(draft["text"], accepted)
+                            # Parse once per accepted batch; the final publish also validates all images.
+                            render(candidate, image_map)
+                            metrics["validation_seconds"] += time.perf_counter()-now
+                            draft["text"] = candidate
+                            draft["history"].append({"page":page+1,"edits":accepted,"reviewed":True})
+                            for e in accepted:
+                                local = local.replace(e["before"], e["after"], 1)
+                        for issue in review_issues:
+                            if issue["verdict"] == "unresolved":
+                                draft["issues"].append({"page":page+1,"text":issue["before"][:180]+": "+issue["reason"]})
                     else:
-                        uncertain.pop(issue["before"], None)
-                for edit in accepted:
-                    uncertain.pop(edit["before"], None)
-                feedback = ("\nThese proposed edits were NOT applied because their before substring was not an exact unique "
-                            "match (or changed an image). Locate them afresh in CURRENT extraction, using its literal "
-                            "characters and escapes: " + json.dumps(rejected, ensure_ascii=False)) if rejected else ""
-                if review_issues:
-                    feedback += ("\nIndependent PDF review did NOT apply these changes. Keep the printed author content; "
-                                 "do not re-propose these unless the supplied images establish different evidence: " +
-                                 json.dumps(review_issues, ensure_ascii=False))
-                draft["text"] = text
-                if accepted:
-                    draft["history"].append({"page": page + 1, "edits": accepted, "reviewed": True})
-                if attempt == 2 and rejected:
-                    draft["issues"].append({"page": page + 1, "text": "Could not locate proposed PDF corrections: " +
-                                           "; ".join(e["before"][:180] for e in rejected)})
-            draft["issues"].extend({"page": page + 1, "text": before[:180] + ": " + reason}
-                                   for before, reason in uncertain.items())
-            draft["page"] = page + 1
-            _write(d, "correction-work.json", draft)
-            s.update(done=page + 1, issues=draft["issues"])
-            _write(d, "correction.json", s)
+                        accepted = []
+                    # The independent call has already inspected every accepted after against PDF.
+                    # Revisit only rejected/stale locations, not an unchanged full page a second time.
+                    if not rejected:
+                        break
+                    if attempt == 2:
+                        draft["issues"].append({"page":page+1,"text":"Could not locate proposed PDF corrections: "+json.dumps(rejected,ensure_ascii=False)})
+                        break
+                    result = request("Region verification pass. Re-locate only these stale/overlapping edits against "
+                        "the page image and CURRENT extraction. Already reviewed changes must retain printed author "
+                        "symbols. Do not change other passages. Return edits/issues.\n"+
+                        json.dumps({"rejected":rejected,"independent_review":feedback},ensure_ascii=False)+
+                        "\nCURRENT extraction:\n"+local, SCHEMA, [png(image)], page, "overlap-resolution")
+                draft["page"] = page + 1
+                _write(d, "correction-work.json", draft)
+                s.update(done=page+1, issues=draft["issues"])
+                _write(d, "correction.json", s)
+                image.close()
+                if page + 2 < total:
+                    pending[page+2] = pool.submit(first, page+2)
         publish(pid, draft["text"], s)
         s.update(status="done", model=spec["id"], edits=sum(len(h["edits"]) for h in draft["history"]), finished=store.stamp())
-        _write(d, "correction.json", s)
         progress("PDF 校对中", total, total)
     except Exception as e:
-        s.update(status="stopped" if isinstance(e, llm.Stopped) else "error", error=str(e))
-        _write(d, "correction.json", s)
+        s.update(status="stopped" if isinstance(e,llm.Stopped) else "error", error=str(e))
         raise
     finally:
         with PDFIUM:
             pdf.close()
+        metrics["wall_seconds"] = time.perf_counter()-started
+        s["timing"] = metrics
+        _write(d,"correction.json",s)

@@ -46,7 +46,10 @@ def _katex_inside():
 
 def _has_tex(doc):
     """Math the model wrote that matches no formula of the paper ({"x": latex}): only that needs KaTeX."""
-    return '"x":' in json.dumps([doc["units"], doc["chunks"]])
+    return ('"x":' in json.dumps([doc["units"], doc["chunks"]]) or
+            any("$" in row.get(k, "") for c in doc["chunks"] for lad in
+                [c.get("lad")] + [z.get("lad") for z in c.get("tr", {}).values()] if lad
+                for row in lad.get("equations", []) for k in ("meaning", "conditions")))
 
 
 ANIMATED_INSIDE = 2_000_000   # a moving picture larger than this goes into a single-file page as its first frame

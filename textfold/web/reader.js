@@ -353,7 +353,13 @@
         target.append(f);
       } else if (b.k === 'eq' || b.k === 'raw') {
         list = null;
-        const e = h('div', b.k, b.html); e.dataset.id = `${b.k}:${b.id || Math.random().toString(36).slice(2)}`;
+        const e = h('div', b.k, b.k === 'eq' ? null : b.html); e.dataset.id = `${b.k}:${b.id || Math.random().toString(36).slice(2)}`;
+        if (b.k === 'eq') {
+          e.append(h('div', 'eq-body', b.html));
+          e.dataset.eq = b.id; e.dataset.chunk = b.chunk || '';
+          const meaning = h('div', 'eq-meaning'); meaning.dataset.id = `eq-meaning:${b.id}`;
+          e.append(meaning);
+        }
         e.dataset.l = level; lvBlocks.push(e);
         target.append(e);
       }
@@ -372,6 +378,18 @@
 
   // everything that is text in the chrome or depends on the language but is not a unit
   function applyLang() {
+    for (const e of docEl.querySelectorAll('.eq[data-eq]')) {
+      const c = D.chunks.find(c => c.id === e.dataset.chunk);
+      const base = c && c.lad && (c.lad.equations || []).find(r => r.id === e.dataset.eq);
+      const z = c && trOf(c);
+      const translated = z && z.lad && (z.lad.equations || []).find(r => r.id === e.dataset.eq);
+      const row = translated || base;
+      e.dataset.key = base && base.key ? '1' : '0';
+      e.dataset.takeaway = base && base.takeaway ? '1' : '0';
+      const meaning = e.querySelector('.eq-meaning');
+      meaning.innerHTML = row ? mathify([row.meaning, row.conditions].filter(Boolean).join(' '), e.innerHTML) : '';
+      texify(meaning);
+    }
     const t = T[ui], c = T[lang], m = D.meta;   // (c: the names of the paper's own parts, in the language it is read in)
     document.documentElement.lang = I18N.htmlLang(lang);
     document.documentElement.dataset.lang = lang;
