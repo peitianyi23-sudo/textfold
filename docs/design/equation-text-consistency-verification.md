@@ -36,4 +36,8 @@ on RTX 4060 Ti, GPU compositing/rasterization enabled, 1512×982, scale factor 2
 The same levels (1,4,0,4) were reached. Aggregate dropped frames: 27/1094 (2.47%) before, 21/1142 (1.84%) after.
 No overall zoom regression is indicated; the measurement is not a claim of a performance improvement.
 
-Delivery follows successful feature validation, preserving daily papers and unrelated checkout changes.
+Signed-off implementation `5517c9286894500a23fbc05c9c52960fec368339` was merged into `personal` after feature
+validation. The idle daily service was restarted (PID 73656 → 65404); served JS/CSS match the primary checkout.
+Daily paper PDF/source/notes/layer bytes and model selection were preserved. Actual in-app-browser verification
+confirmed no correction banner, and direct clicking produced `eq-caption has-source local-open` with original prose.
+The isolated feature server was stopped. Unrelated glossary and design drafts remain untouched; no push/PR.
