@@ -304,8 +304,22 @@ figure.fig[data-l="0"] .flabel { font-weight: 600; color: var(--muted); }
 .eq[data-l="2"]:not([data-key="1"]), .eq[data-l="1"]:not([data-takeaway="1"]), .eq[data-l="0"], .raw[data-l="2"], .raw[data-l="1"], .raw[data-l="0"],
 .front[data-l="2"], .front[data-l="1"], .front[data-l="0"],
 .doc:not([data-level="4"]) .bib { display: none; }
-.eq-meaning { display: none; font: 14px/1.5 var(--sans); color: var(--ink-2); white-space: normal; }
-.eq[data-l="2"] .eq-meaning, .eq[data-l="1"] .eq-meaning { display: block; margin-top: 8px; }
+.eq-caption { display: none; margin-top: 10px; font: 14.5px/1.5 var(--sans); color: var(--ink-2); white-space: normal; }
+.eq[data-l="2"] .eq-caption:not([hidden]), .eq[data-l="1"] .eq-caption:not([hidden]) { display: block; }
+/* Match figure captions, including the space beside the Takeaway spine. */
+.doc[data-level="1"] .eq-caption { padding-left: 22px; }
+.eq-meaning { list-style: none; }
+.eq-caption.has-source .eq-meaning { cursor: pointer; }
+.eq-meaning::-webkit-details-marker { display: none; }
+.eq-meaning:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
+.eq-toggle { color: var(--muted); font-size: 12px; white-space: nowrap; margin-left: .6em; }
+.eq-caption:not(.has-source) .eq-toggle { display: none; }
+.eq-toggle::before { content: '▸ '; }
+.eq-caption[open] .eq-toggle { margin-left: 0; }
+.eq-caption[open] .eq-toggle::before { content: '▾ '; }
+.eq-caption[open] .eq-short { display: none; }
+.eq-source { font-family: var(--serif); }
+.eq-source p { margin: 8px 0 0; }
 .eq table { max-width: none; } /* preserve author rows and numbering; overflow stays formula-local */
 .bib { margin-top: 48px; font-family: var(--serif); font-size: 14.5px; color: var(--ink-2); }
 .bib summary { font-family: var(--sans); font-size: 20px; font-weight: 700; color: var(--ink); cursor: pointer; margin-bottom: 10px; }

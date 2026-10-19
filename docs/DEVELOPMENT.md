@@ -455,7 +455,13 @@ comparison/review stage, or the HTTP status and retry wait; `timing.requests[*].
 
 Display equations participate in the section's progressive compression. `chunks[*].lad.equations` stores source
 block ids, separate `key` and `takeaway` decisions (Takeaway is a subset), meaning and necessary conditions.
-Translations keep those decisions and translate the explanations. The reader displays selected original equation
+Translations keep those decisions and translate the explanations. Equation explanations at Key and Takeaway
+follow figure-caption alignment, including the Takeaway spine inset. Their **Original** disclosure switches from
+the short model explanation to the adjacent author paragraphs in the same section, preserving the source math.
+These are original explanatory context, rather than an invented author caption. Closing the disclosure restores
+the short explanation; changing the global level closes it too. Source paragraphs are rendered only when opened,
+and sandbox keyframes keep them closed. Essential equation concepts also inform the section takeaway and Topic;
+Topic remains a concept map without displaying formulas. The reader displays selected original equation
 HTML directly at Key/Takeaway, including long formulas and author numbers; author rows stay intact and wider
 formulas scroll within their own block. Topic stays unchanged. Existing layers acquire selection when regenerated;
 opening a paper does not regenerate the library.

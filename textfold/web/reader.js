@@ -300,7 +300,7 @@
     const chunkById = Object.fromEntries(D.chunks.map((c) => [c.id, c]));
     let body = chunksEl, list = null, listId = null, front = null;
     const boxes = [];       // open theorem / definition / proof frames
-    for (const b of D.blocks) {
+    for (const [blockIndex, b] of D.blocks.entries()) {
       if (b.k === 'box') {
         const cat = b.kind === 'proof' ? 'proof' : /^def/.test(b.kind) ? 'def' : /rem|exa|note|obs/.test(b.kind) ? 'rem' : 'thm';
         const bx = h('div', `box box-${cat}`); bx.id = b.id;
@@ -357,8 +357,29 @@
         if (b.k === 'eq') {
           e.append(h('div', 'eq-body', b.html));
           e.dataset.eq = b.id; e.dataset.chunk = b.chunk || '';
-          const meaning = h('div', 'eq-meaning'); meaning.dataset.id = `eq-meaning:${b.id}`;
-          e.append(meaning);
+          // Equations have surrounding author prose, rather than an authored figure caption.
+          // Keep those source units separate from the model's short explanation.
+          const context = [];
+          for (const direction of [-1, 1]) {
+            for (let j = blockIndex + direction; j >= 0 && j < D.blocks.length; j += direction) {
+              const near = D.blocks[j];
+              if (near.chunk !== b.chunk || near.k === 'h' || near.k === 'fig') break;
+              if (near.k === 'u') { context.push(near.u); break; }
+              if (near.k !== 'eq') break;
+            }
+          }
+          const caption = h('details', 'eq-caption');
+          e._caption = caption;
+          const summary = h('summary', 'eq-meaning'); summary.dataset.id = `eq-meaning:${b.id}`;
+          summary.append(h('span', 'eq-short'), h('span', 'eq-toggle'));
+          summary.addEventListener('click', (event) => { if (!context.length) event.preventDefault(); });
+          caption.append(summary, h('div', 'eq-source'));
+          e._context = context;
+          caption.addEventListener('toggle', () => {
+            renderEquationSource(e);
+            capEpoch++; geom = null; warmSoon();
+          });
+          e.append(caption);
         }
         e.dataset.l = level; lvBlocks.push(e);
         target.append(e);
@@ -376,6 +397,16 @@
     }
   }
 
+  function renderEquationSource(e) {
+    const source = e.querySelector('.eq-source');
+    source.replaceChildren();
+    if (!e.querySelector('.eq-caption').open) return;
+    for (const uid of e._context) {
+      const p = h('p', null, textHtml(uid, 4)); p.dataset.sourceU = uid;
+      source.append(p); texify(p);
+    }
+  }
+
   // everything that is text in the chrome or depends on the language but is not a unit
   function applyLang() {
     for (const e of docEl.querySelectorAll('.eq[data-eq]')) {
@@ -386,9 +417,14 @@
       const row = translated || base;
       e.dataset.key = base && base.key ? '1' : '0';
       e.dataset.takeaway = base && base.takeaway ? '1' : '0';
-      const meaning = e.querySelector('.eq-meaning');
-      meaning.innerHTML = row ? mathify([row.meaning, row.conditions].filter(Boolean).join(' '), e.innerHTML) : '';
+      const meaning = e.querySelector('.eq-short');
+      meaning.innerHTML = row ? mathify([row.meaning, row.conditions].filter(Boolean).join(' '), e.querySelector('.eq-body').innerHTML) : '';
       texify(meaning);
+      const caption = e.querySelector('.eq-caption');
+      caption.hidden = !row;
+      e.querySelector('.eq-toggle').textContent = e._context.length ? T[ui].compare : '';
+      caption.classList.toggle('has-source', !!e._context.length);
+      renderEquationSource(e);
     }
     const t = T[ui], c = T[lang], m = D.meta;   // (c: the names of the paper's own parts, in the language it is read in)
     document.documentElement.lang = I18N.htmlLang(lang);
@@ -465,7 +501,11 @@
   // Blocks (equations above all: MathML is the costliest thing to lay out) follow the same rule.
   let staleQ = [];
   const order = new Map();   // uid -> position in the paper
-  const redraw = (x) => { if (typeof x === 'string') renderUnit(x, false); else { x.dataset.l = level; x._stale = false; } };
+  const drawBlock = (x) => {
+    x.dataset.l = level; x._stale = false;
+    if (x._caption) x._caption.open = false;
+  };
+  const redraw = (x) => { if (typeof x === 'string') renderUnit(x, false); else drawBlock(x); };
   const elOf = (x) => (typeof x === 'string' ? unitEl.get(x) : x);
   function renderAll(hot = null, band = null) {
     staleQ = [];
@@ -475,7 +515,7 @@
       else { unitEl.get(uid)._stale = true; staleQ.push(uid); }
     }
     for (const b of lvBlocks) {
-      if (!band || band.has(b)) { b.dataset.l = level; b._stale = false; } else { b._stale = true; staleQ.push(b); }
+      if (!band || band.has(b)) drawBlock(b); else { b._stale = true; staleQ.push(b); }
     }
   }
   // what is stale but the change has brought on screen is drawn now (the shrinking text pulled it in)
@@ -1136,6 +1176,8 @@
       if (cl.contains('stake') || cl.contains('box-h') || cl.contains('fbody') || cl.contains('eq') || cl.contains('raw')) {
         const el = node.cloneNode(true);
         if (lv.has(node)) { el.dataset.l = L; el._pos = node._pos; }
+        const caption = cl.contains('eq') && el.querySelector('.eq-caption');
+        if (caption) { caption.open = false; caption.querySelector('.eq-source').replaceChildren(); }
         return el;
       }
       if (cl.contains('side') || cl.contains('lside')) return node.cloneNode(true);

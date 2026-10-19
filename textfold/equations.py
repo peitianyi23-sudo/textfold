@@ -39,7 +39,9 @@ def prompt(doc, chunk):
             "conditions even when they need more words than a headline. Copy essential mathematical conditions "
             "exactly as $...$, rather than spelling out powers or weakening inequalities. Meaning/conditions are English; empty "
             "conditions only if none are needed. Refer to the author's equation numbers in explanations, never "
-            "internal source ids. Topic has no new equation requirement.\n")
+            "internal source ids. Integrate the concepts and findings of essential equations into the section's "
+            "takeaway and topic, rather than treating equation selection as a separate summary. Topic remains a "
+            "short concept map, without displaying the formulas themselves.\n")
 
 
 def selected(doc, chunk, rows):
