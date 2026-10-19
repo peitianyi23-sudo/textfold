@@ -55,4 +55,10 @@ Aggregate dropped frames are 8/1140 (0.70%) before and 6/1137 (0.53%) after. Ind
 number of frames; this run shows no overall smoothness regression and does not establish a performance improvement.
 All four gestures reach the same intended levels in both versions (1, 4, 0, 4).
 
-Delivery into `personal` follows successful feature-branch validation.
+## Delivery
+
+Signed-off commit `e6fca88bf0945fe9a1e362019de82ba498f2a7e6` was fast-forward merged into `personal` after the
+feature-branch checks. Both queues were idle before restarting the existing daily service, PID 17256 → 73656.
+Served `reader.js`, `reader.css` and `app.js` match the primary checkout. The model selection, affected paper and
+previous validation papers' PDF/source/notes/layer bytes stayed unchanged. The existing bridge was retained.
+Unrelated glossary edits and design drafts remain untouched. No push or upstream PR was made.
