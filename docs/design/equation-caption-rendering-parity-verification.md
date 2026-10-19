@@ -56,4 +56,7 @@ versions includes a roughly 1.5s idle/warm interval. The large Click Full differ
 was not reproduced consistently. These measurements show mixed small-frame variation and faster pinch sequences;
 they do not establish a speedup or prove identical timing. The visual parity checks are separate from this evidence.
 
-Feature validation completed before local personal delivery. No model regeneration is required.
+Signed-off implementation `a22756976797eb3adb6ddc359c784c41d1a1c9a0` was fast-forward merged into personal after
+feature validation. The idle daily service was restarted (PID 65404 → 48076). Served JS/CSS match the primary
+checkout; daily PDF/source/notes/layer bytes and model settings stayed unchanged. No model regeneration was run.
+Unrelated glossary and design drafts were preserved. No push or upstream PR. The isolated feature server was stopped.
