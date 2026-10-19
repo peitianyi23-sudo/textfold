@@ -92,7 +92,7 @@ class ScopeTests(unittest.TestCase):
             return {"edits":[{"before":"A healthy paragraph","after":"UNREVIEWED","reason":"late"}],"issues":[]}
         with patch.object(llm_openai,"vision",side_effect=response):
             with self.assertRaises(llm.Stopped):
-                correction.run(PID,SPEC,stop=stop,scope=scopes.select({"kind":"range","ranges":[[1,2]]},31),concurrency=1)
+                correction.run(PID,SPEC,stop=stop,scope=scopes.select({"kind":"range","ranges":[[1,2]]},31))
         self.assertEqual(correction.state(PID)["checked"],[1])
         self.assertIn("A turbulent flow.",(self.d/"source.md").read_text(encoding="utf-8"))
         self.assertNotIn("UNREVIEWED",(self.d/"source.md").read_text(encoding="utf-8"))
@@ -234,6 +234,24 @@ class ScopeTests(unittest.TestCase):
         with patch.object(llm_openai,"vision",side_effect=reply):
             correction.run(PID,SPEC)
         self.assertTrue(any("Numbered displays still need restoration: 4" in r["text"] for r in correction.state(PID)["issues"]))
+
+    def test_next_page_comparison_waits_for_current_page_independent_review(self):
+        correction.queue(PID)
+        next_page = threading.Event()
+        reviewed = threading.Event()
+        def reply(prompt,schema,*a):
+            if schema is correction.REVIEW:
+                self.assertFalse(next_page.wait(.03),"Next page started during independent review")
+                reviewed.set()
+                return {"decisions":[{"index":0,"verdict":"accept","reason":"Printed text"}]}
+            if "physical PDF page 1" in prompt:
+                return {"edits":[{"before":"Broken turbuð Þlent flow.","after":"A turbulent flow.","reason":"PDF"}],"issues":[]}
+            next_page.set()
+            self.assertTrue(reviewed.is_set(),"Comparison prefetch must remain disabled")
+            return {"edits":[],"issues":[]}
+        with patch.object(llm_openai,"vision",side_effect=reply):
+            correction.run(PID,SPEC)
+        self.assertEqual(correction.state(PID)["status"],"done")
 
 
 if __name__ == "__main__":

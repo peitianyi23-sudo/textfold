@@ -70,7 +70,17 @@ counts are observed outcomes, not a controlled causal estimate or a promised spe
 
 The **three-request** experiment failed on its first paper: HTTP 500, 83.23 s, four requests including one provider
 failure, and zero pages marked checked. It produced no valid completed quality/latency sample. Default concurrency
-therefore remains **two**. No provider or subscription configuration was changed.
+remained **two** at the initial delivery. No provider or subscription configuration was changed.
+
+### User-requested concurrency rollback
+
+After reviewing these measurements, the user requested **single-request** checking. The page-comparison executor
+and its prefetch window have been removed: the current page's comparison and all independent review/restoration
+requests finish before the next page starts. Scope selection, 30-page batches, resumable coverage, merged crops and
+omission-restoration reuse remain. This does not change the separate summary/translation generation worker settings.
+The added regression test verifies that the next physical page cannot start during the current page's independent
+review. The rollback suite passes 155 tests; no additional live model benchmark or zoom trace is needed for this
+scheduler-only change. No speedup is claimed for the serial configuration.
 
 ## Quality finding and correction
 

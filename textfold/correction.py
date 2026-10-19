@@ -10,7 +10,6 @@ import json
 import re
 import shutil
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -355,7 +354,7 @@ def page_ranges(text, page_texts):
     return out
 
 
-def run(pid, spec, progress=lambda *a: None, stop=None, scope=None, concurrency=2):
+def run(pid, spec, progress=lambda *a: None, stop=None, scope=None):
     s = state(pid)
     if scope is not None:
         if not s:
@@ -468,126 +467,119 @@ def run(pid, spec, progress=lambda *a: None, stop=None, scope=None, concurrency=
             # Keep it as a proposal, never as completed coverage or a source publication.
             _write(proposals, saved.name, {"local":local, "result":result})
             return result, image, local
-        # A bounded window and a <=30-page batch, never a whole-book request backlog.
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            pending = {}
-            for page in batch[:concurrency]:
-                pending[page] = pool.submit(first, page)
-            for index, page in enumerate(batch):
-                progress("PDF 校对中", len(draft["checked"]), total)
-                result, image, local = pending.pop(page).result()
-                check()
-                for change in draft["history"][history_start:]:
-                    for edit in change["edits"]:
-                        if edit["before"] in local:
-                            local = local.replace(edit["before"], edit["after"], 1)
-                for row in result.get("displays", []):
-                    seen = draft["displays"].setdefault(row["number"], [])
-                    if page + 1 not in seen:
-                        seen.append(page + 1)
-                inventory = result.get("displays", [])
-                missing = missing_displays(result)
-                if missing:
-                    # Explicit inventory prevents a readable omitted display being left as a vague issue.
-                    crops = review_crops(missing, image, .05)
-                    extra = request("Restore the following numbered display equations, including every line and printed "
-                        "number as \\tag{n}, from the supplied original PDF regions. They were inventoried as incomplete "
-                        "in CURRENT extraction. Return exact unique insertion/replacement anchors. Do not repeat edits "
-                        "already proposed below. Preserve author symbols; if unreadable, report the exact ambiguity. "
-                        "Copy each region's original full-page box into its proposed edit.\n"+
-                        json.dumps({"displays":missing,"already_proposed":result["edits"]},ensure_ascii=False)+
-                        "\nCURRENT extraction:\n"+local,SCHEMA,crops,page,"missing-display-regions")
-                    result["edits"].extend(extra["edits"])
-                    result["issues"].extend(extra["issues"])
-                feedback = []
-                for attempt in range(3):
-                    candidates, rejected = [], []
-                    # Simultaneous comparisons share a snapshot. Resolve overlaps against the current draft,
-                    # never apply an offset calculated before a different page changed the same passage.
-                    text = draft["text"]
-                    for edit in result["edits"]:
-                        if edit["before"] == edit["after"]:
-                            continue
-                        try:
-                            candidate = patches(text, [edit])
-                            # Enforce page-local ownership even when a passage is unique elsewhere.
-                            if edit["before"] not in local:
-                                raise ValueError("Proposed change lies outside this page's supplied extraction")
-                            text = candidate; candidates.append(edit)
-                        except ValueError as e:
-                            rejected.append({"before": edit["before"], "error": str(e)})
-                    draft["issues"] = [x for x in draft["issues"] if x["page"] != page + 1]
-                    draft["issues"].extend({"page": page + 1, "text": x} for x in result["issues"])
-                    crops = review_crops(candidates, image)
-                    if candidates:
+        # Finish comparison and independent review before starting the next page.
+        for page in batch:
+            progress("PDF 校对中", len(draft["checked"]), total)
+            result, image, local = first(page)
+            check()
+            for change in draft["history"][history_start:]:
+                for edit in change["edits"]:
+                    if edit["before"] in local:
+                        local = local.replace(edit["before"], edit["after"], 1)
+            for row in result.get("displays", []):
+                seen = draft["displays"].setdefault(row["number"], [])
+                if page + 1 not in seen:
+                    seen.append(page + 1)
+            inventory = result.get("displays", [])
+            missing = missing_displays(result)
+            if missing:
+                # Explicit inventory prevents a readable omitted display being left as a vague issue.
+                crops = review_crops(missing, image, .05)
+                extra = request("Restore the following numbered display equations, including every line and printed "
+                    "number as \\tag{n}, from the supplied original PDF regions. They were inventoried as incomplete "
+                    "in CURRENT extraction. Return exact unique insertion/replacement anchors. Do not repeat edits "
+                    "already proposed below. Preserve author symbols; if unreadable, report the exact ambiguity. "
+                    "Copy each region's original full-page box into its proposed edit.\n"+
+                    json.dumps({"displays":missing,"already_proposed":result["edits"]},ensure_ascii=False)+
+                    "\nCURRENT extraction:\n"+local,SCHEMA,crops,page,"missing-display-regions")
+                result["edits"].extend(extra["edits"])
+                result["issues"].extend(extra["issues"])
+            feedback = []
+            for attempt in range(3):
+                candidates, rejected = [], []
+                # Comparisons use a batch snapshot. Resolve overlaps against the current draft,
+                # never apply an offset calculated before a different page changed the same passage.
+                text = draft["text"]
+                for edit in result["edits"]:
+                    if edit["before"] == edit["after"]:
+                        continue
+                    try:
+                        candidate = patches(text, [edit])
+                        # Enforce page-local ownership even when a passage is unique elsewhere.
+                        if edit["before"] not in local:
+                            raise ValueError("Proposed change lies outside this page's supplied extraction")
+                        text = candidate; candidates.append(edit)
+                    except ValueError as e:
+                        rejected.append({"before": edit["before"], "error": str(e)})
+                draft["issues"] = [x for x in draft["issues"] if x["page"] != page + 1]
+                draft["issues"].extend({"page": page + 1, "text": x} for x in result["issues"])
+                crops = review_crops(candidates, image)
+                if candidates:
+                    now = time.perf_counter()
+                    rec = {"page":page+1,"stage":"independent-region-review","images":len(crops)}
+                    try:
+                        accepted, review_issues = review(candidates, crops, spec,
+                            f"{page+1}, merged context crops covering ALL indexed edits; check the corrected result against the printed region")
+                    except Exception as e:
+                        rec["error"] = str(e)
+                        raise
+                    finally:
+                        rec["seconds"] = time.perf_counter()-now
+                        metrics["requests"].append(rec)
+                    feedback = review_issues
+                    if review_issues:
+                        draft.setdefault("reviews", []).append({"page": page+1, "issues": review_issues})
+                    if accepted:
                         now = time.perf_counter()
-                        rec = {"page":page+1,"stage":"independent-region-review","images":len(crops)}
-                        try:
-                            accepted, review_issues = review(candidates, crops, spec,
-                                f"{page+1}, merged context crops covering ALL indexed edits; check the corrected result against the printed region")
-                        except Exception as e:
-                            rec["error"] = str(e)
-                            raise
-                        finally:
-                            rec["seconds"] = time.perf_counter()-now
-                            metrics["requests"].append(rec)
-                        feedback = review_issues
-                        if review_issues:
-                            draft.setdefault("reviews", []).append({"page": page+1, "issues": review_issues})
-                        if accepted:
-                            now = time.perf_counter()
-                            candidate = patches(draft["text"], accepted)
-                            # Parse once per accepted batch; the final publish also validates all images.
-                            render(candidate, image_map)
-                            metrics["validation_seconds"] += time.perf_counter()-now
-                            draft["text"] = candidate
-                            draft["history"].append({"page":page+1,"edits":accepted,"reviewed":True})
-                            for e in accepted:
-                                local = local.replace(e["before"], e["after"], 1)
-                        for issue in review_issues:
-                            if issue["verdict"] == "unresolved":
-                                draft["issues"].append({"page":page+1,"text":issue["before"][:180]+": "+issue["reason"]})
-                    else:
-                        accepted = []
-                    remaining = [r for r in inventory if not re.search(
-                        r"\\tag\*?\s*\{" + re.escape(r["number"]) + r"\}", draft["text"])]
-                    if remaining:
-                        if attempt == 2:
-                            draft["issues"].append({"page":page+1,"text":"Numbered displays still need restoration: " +
-                                                   ", ".join(r["number"] for r in remaining)})
-                        else:
-                            # An initial proposal may contain the missing number but fail
-                            # independent review. Its mere presence in a proposal isn't repair.
-                            result = request("Restore ONLY these still-missing numbered displays/labels from the original "
-                                "PDF regions. The earlier proposal failed independent review; use its visible evidence "
-                                "below to correct the actual printed symbols as well as the label. Return unique exact "
-                                "replacement anchors in CURRENT extraction, preserving author notation.\n" +
-                                json.dumps({"displays":remaining,"review":feedback},ensure_ascii=False) +
-                                "\nCURRENT extraction:\n"+local, SCHEMA, review_crops(remaining,image,.05), page,
-                                "missing-display-recovery")
-                            continue
-                    # The independent call has already inspected every accepted after against PDF.
-                    # Revisit only rejected/stale locations, not an unchanged full page a second time.
-                    if not rejected:
-                        break
+                        candidate = patches(draft["text"], accepted)
+                        # Parse once per accepted batch; the final publish also validates all images.
+                        render(candidate, image_map)
+                        metrics["validation_seconds"] += time.perf_counter()-now
+                        draft["text"] = candidate
+                        draft["history"].append({"page":page+1,"edits":accepted,"reviewed":True})
+                        for e in accepted:
+                            local = local.replace(e["before"], e["after"], 1)
+                    for issue in review_issues:
+                        if issue["verdict"] == "unresolved":
+                            draft["issues"].append({"page":page+1,"text":issue["before"][:180]+": "+issue["reason"]})
+                else:
+                    accepted = []
+                remaining = [r for r in inventory if not re.search(
+                    r"\\tag\*?\s*\{" + re.escape(r["number"]) + r"\}", draft["text"])]
+                if remaining:
                     if attempt == 2:
-                        draft["issues"].append({"page":page+1,"text":"Could not locate proposed PDF corrections: "+json.dumps(rejected,ensure_ascii=False)})
-                        break
-                    result = request("Region verification pass. Re-locate only these stale/overlapping edits against "
-                        "the page image and CURRENT extraction. Already reviewed changes must retain printed author "
-                        "symbols. Do not change other passages. Return edits/issues.\n"+
-                        json.dumps({"rejected":rejected,"independent_review":feedback},ensure_ascii=False)+
-                        "\nCURRENT extraction:\n"+local, SCHEMA, [png(image)], page, "overlap-resolution")
-                draft["page"] = page + 1
-                draft["checked"] = sorted(set(draft["checked"]) | {page + 1})
-                _write(d, "correction-work.json", draft)
-                s.update(done=len(draft["checked"]), issues=draft["issues"])
-                _write(d, "correction.json", s)
-                image.close()
-                check()
-                if index + concurrency < len(batch):
-                    nxt = batch[index + concurrency]
-                    pending[nxt] = pool.submit(first, nxt)
+                        draft["issues"].append({"page":page+1,"text":"Numbered displays still need restoration: " +
+                                               ", ".join(r["number"] for r in remaining)})
+                    else:
+                        # An initial proposal may contain the missing number but fail
+                        # independent review. Its mere presence in a proposal isn't repair.
+                        result = request("Restore ONLY these still-missing numbered displays/labels from the original "
+                            "PDF regions. The earlier proposal failed independent review; use its visible evidence "
+                            "below to correct the actual printed symbols as well as the label. Return unique exact "
+                            "replacement anchors in CURRENT extraction, preserving author notation.\n" +
+                            json.dumps({"displays":remaining,"review":feedback},ensure_ascii=False) +
+                            "\nCURRENT extraction:\n"+local, SCHEMA, review_crops(remaining,image,.05), page,
+                            "missing-display-recovery")
+                        continue
+                # The independent call has already inspected every accepted after against PDF.
+                # Revisit only rejected/stale locations, not an unchanged full page a second time.
+                if not rejected:
+                    break
+                if attempt == 2:
+                    draft["issues"].append({"page":page+1,"text":"Could not locate proposed PDF corrections: "+json.dumps(rejected,ensure_ascii=False)})
+                    break
+                result = request("Region verification pass. Re-locate only these stale/overlapping edits against "
+                    "the page image and CURRENT extraction. Already reviewed changes must retain printed author "
+                    "symbols. Do not change other passages. Return edits/issues.\n"+
+                    json.dumps({"rejected":rejected,"independent_review":feedback},ensure_ascii=False)+
+                    "\nCURRENT extraction:\n"+local, SCHEMA, [png(image)], page, "overlap-resolution")
+            draft["page"] = page + 1
+            draft["checked"] = sorted(set(draft["checked"]) | {page + 1})
+            _write(d, "correction-work.json", draft)
+            s.update(done=len(draft["checked"]), issues=draft["issues"])
+            _write(d, "correction.json", s)
+            image.close()
+            check()
         publish(pid, draft["text"], s)
         doc = store.parsed(pid)
         mapping = scopes.content_pages(doc, pages, draft["displays"])

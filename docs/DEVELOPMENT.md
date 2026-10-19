@@ -436,8 +436,9 @@ found unlawful without consent in 2022.)
 
 ## Smoothness is a rule
 
-PDF correction compares every physical page in the selected scope, with two page comparisons in flight (the
-three-request experiment failed provider acceptance and was not adopted). Reading-order text anchors
+PDF correction runs one request at a time: each physical page's full comparison and independent edit review finish
+before the next page starts. Multi-request experiments did not establish an overall speedup and were rolled back
+to serial checking at the user's request. Reading-order text anchors
 localize Markdown even when it came from a finalized cache without block coordinates; scans can use extractor
 blocks, and an unmapped page keeps full context. Parallel comparisons share a snapshot; exact replacements are
 resolved against the current draft before publication. Changed paragraphs/equations are independently checked
