@@ -328,7 +328,11 @@ the numeric attachment ID is checked against the selected library in a temporary
 (Zotero holds an exclusive lock on the live database). The snapshot is discarded after the lookup. No cache file or
 Zotero database is changed.
 
-Nonempty `full.md` and a readable `content_list.json` make the cache ready. The adapter maps the latter's blocks,
+Nonempty `full.md` and a readable `content_list.json` (or MinerU's original `*_content_list.json`) make the cache ready.
+Older finalized caches with only Markdown and a manifest are read directly from that Markdown; Original still opens
+the PDF, but these caches have no block-derived page map. A pending cache-write marker keeps the reader waiting.
+For caches predating `_llm_source.json`, the current database verifies the numeric attachment folder and its parent
+in the selected library. When provenance exists it must still match. The adapter maps the content-list blocks,
 LaTeX, tables and 0–1000 page coordinates to TextFold's existing document format. Images come from the cache, then
 existing figure crops; missing images are rendered from the selected PDF with the app's own pypdfium2. Rendering a
 region is not PDF parsing and needs no extra engine. The imported document keeps `source.pdf`, its page map and

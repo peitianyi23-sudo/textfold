@@ -565,6 +565,45 @@ class CacheTest(Setup):
             shutil.rmtree(data / 'llm-for-zotero-mineru', ignore_errors=True)
             (data / 'zotero.sqlite').unlink(missing_ok=True)
 
+    def test_original_mineru_content_list_filename_is_read(self):
+        data = self.tmp / 'zotero-data'
+        file = data / 'storage/ATTPDFS2/paper.pdf'
+        cache = cached_pdf(data)
+        try:
+            (cache / 'content_list.json').rename(cache / 'original-job_content_list.json')
+            found = zotero_cache.find('users/0', 'PDFSKEY2', 'ATTPDFS2', file, data)
+            self.assertIsNotNone(found)
+            self.assertTrue(found[1])
+        finally:
+            shutil.rmtree(data / 'llm-for-zotero-mineru', ignore_errors=True)
+            (data / 'zotero.sqlite').unlink(missing_ok=True)
+
+    def test_finalized_markdown_cache_without_content_list_imports_without_parser(self):
+        data = self.tmp / 'zotero-data'
+        cache = cached_pdf(data)
+        try:
+            (cache / 'content_list.json').unlink()
+            (cache / 'manifest.json').write_text(json.dumps({'sections': [], 'totalPages': 2}))
+            (cache / 'full.md').write_text('# Finalized paper\n\nOriginal finalized words.\n\n![A figure](images/fig.png)')
+            pending = cache / '_llm_write_pending.json'
+            pending.write_text('{}')
+            file = data / 'storage/ATTPDFS2/paper.pdf'
+            self.assertIsNone(zotero_cache.find('users/0', 'PDFSKEY2', 'ATTPDFS2', file, data))
+            pending.unlink()
+            with patch.object(store, 'DATA', self.tmp / 'finalized-import'), \
+                 patch.object(engine, 'crop_here') as crop, patch.object(engine, 'convert') as parse:
+                got = zotero.read('users/0', 'PDFSKEY2')
+                self.assertIn('paper', got)
+                html = (store.pdir(got['paper']) / 'source.html').read_text()
+                self.assertIn('Original finalized words', html)
+                self.assertIn('<img', html)
+                self.assertTrue((store.pdir(got['paper']) / 'source.pdf').is_file())
+                crop.assert_not_called()
+                parse.assert_not_called()
+        finally:
+            shutil.rmtree(data / 'llm-for-zotero-mineru', ignore_errors=True)
+            (data / 'zotero.sqlite').unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()

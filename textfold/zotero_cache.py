@@ -33,6 +33,8 @@ def find(lib, parent, attachment, pdf, data_dir):
                 if not row:
                     return None
                 folder = root / str(row[0])
+                if (folder / "_llm_write_pending.json").exists():
+                    return None
                 source = folder / "_llm_source.json"
                 if source.exists():
                     identity = read_json(source)
@@ -47,7 +49,13 @@ def find(lib, parent, attachment, pdf, data_dir):
                         return None
         if not (folder / "full.md").read_text(encoding="utf-8").strip():
             return None
-        blocks = read_json(folder / "content_list.json")
+        content = folder / "content_list.json"
+        if not content.exists():
+            content = next(iter(sorted(folder.glob("*_content_list.json"))), None)
+        if content is None:
+            # Finalized older caches can retain only Markdown and their manifest.
+            return (folder, None) if isinstance(read_json(folder / "manifest.json"), dict) else None
+        blocks = read_json(content)
         if isinstance(blocks, list) and blocks:
             return folder, blocks
     except (OSError, ValueError, sqlite3.Error):
@@ -130,13 +138,18 @@ def save(pid, cached, pdf, title):
     folder, blocks = cached
     with tempfile.TemporaryDirectory(prefix="textfold-zotero-") as tmp:
         output = Path(tmp)
-        sc = structured(blocks, folder, output, pdf, title)
-        want = []
-        pdfdoc.to_markdown(sc, pdf.name, want=want)
-        jobs = [(w["page"], w["box"], output / "images" / f"figure-{n}.jpg") for n, w in enumerate(want)]
-        done = engine.crop_here(pdf, jobs) if jobs else set()
-        whole = {(p, tuple(box)): "images/" + f.name for p, box, f in jobs if str(f) in done}
-        _, authors, text = pdfdoc.to_markdown(sc, pdf.name, crops=whole)
+        sc = None
+        if blocks is None:
+            text, authors = (folder / "full.md").read_text(encoding="utf-8"), []
+            output = folder
+        else:
+            sc = structured(blocks, folder, output, pdf, title)
+            want = []
+            pdfdoc.to_markdown(sc, pdf.name, want=want)
+            jobs = [(w["page"], w["box"], output / "images" / f"figure-{n}.jpg") for n, w in enumerate(want)]
+            done = engine.crop_here(pdf, jobs) if jobs else set()
+            whole = {(p, tuple(box)): "images/" + f.name for p, box, f in jobs if str(f) in done}
+            _, authors, text = pdfdoc.to_markdown(sc, pdf.name, crops=whole)
         html, _ = markdown.to_html(text)
         meta = {"id": pid, "version": "", "title": title, "authors": authors, "date": "", "doi": "",
                 "snapshot": time.strftime("%Y-%m-%d"), "abs_url": "", "html_url": "", "license": "",
@@ -144,6 +157,7 @@ def save(pid, cached, pdf, title):
                 "label": "Zotero · " + title}
         local.store_doc(pid, html, meta, "source.md", text, lambda f: local.Images(f, output).resolve, sizes=True)
         shutil.copyfile(pdf, d / "source.pdf")
-        (d / "layout.json").write_text(json.dumps(pdfdoc.layout_of(sc), ensure_ascii=False), encoding="utf-8")
-        (d / "structured_content.json").write_text(json.dumps(sc, ensure_ascii=False), encoding="utf-8")
+        if sc is not None:
+            (d / "layout.json").write_text(json.dumps(pdfdoc.layout_of(sc), ensure_ascii=False), encoding="utf-8")
+            (d / "structured_content.json").write_text(json.dumps(sc, ensure_ascii=False), encoding="utf-8")
     return pid
