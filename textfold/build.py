@@ -101,6 +101,21 @@ def page(doc, app=False, assets=None, saved=None, pdf=None):
     pdf: the paper's PDF beside a gallery's page, for the original pages next to the text ({"file", "pdfjs"})."""
     inline_images(doc, app)
     t = (WEB / "template.html").read_text()
+    correction = doc["meta"].get("correction")
+    if correction:
+        status = correction["status"]
+        issues = correction.get("issues") or []
+        title = ("PDF 校对完成 · 有待核实位置" if issues else "PDF 校对完成") if status == "done" else (
+            "PDF 校对未完成 · 当前为提取稿" if status in ("error", "stopped") else "PDF 校对中 · 当前为提取稿")
+        detail = "".join("<li>" + escape(x["text"]) + "</li>" for x in issues)
+        if correction.get("error"):
+            detail += "<li>" + escape(correction["error"]) + "</li>"
+        banner = (f'<details aria-label="PDF 校对" style="position:fixed;top:64px;right:16px;z-index:50;'
+                  f'max-width:360px;max-height:40vh;overflow:auto;padding:8px 12px;border:1px solid #bdb4e6;'
+                  f'border-radius:8px;background:var(--surface);color:var(--ink);font:13px/1.5 system-ui">'
+                  f'<summary>{escape(title)}</summary><p>已检查 {correction.get("done", 0)}/{correction.get("total", 0)} 页。'
+                  f'对照原始 PDF 校正；疑点不自动补写，可在阅读时请 agent 处理。</p><ul>{detail}</ul></details>')
+        t = t.replace('<main id="doc"', banner + '<main id="doc"')
     if app:
         head = '<script src="/static/theme.js"></script>' + fonts_head(APP_ASSETS) + '<link rel="stylesheet" href="/static/reader.css"><link rel="stylesheet" href="/static/app.css">'
         scripts = ('<script src="/static/i18n.js"></script><script src="/static/tutorial.js"></script><script src="/static/reader.js"></script>'

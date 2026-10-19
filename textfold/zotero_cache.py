@@ -160,4 +160,6 @@ def save(pid, cached, pdf, title):
         if sc is not None:
             (d / "layout.json").write_text(json.dumps(pdfdoc.layout_of(sc), ensure_ascii=False), encoding="utf-8")
             (d / "structured_content.json").write_text(json.dumps(sc, ensure_ascii=False), encoding="utf-8")
+        from . import correction
+        correction.queue(pid)
     return pid

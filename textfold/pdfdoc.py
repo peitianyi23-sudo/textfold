@@ -536,6 +536,8 @@ def store_pdf(pid, folder, sc, name, tier, replace=False):
             for f in keep.iterdir():
                 shutil.copy2(f, d / f.name)
             shutil.rmtree(keep)
+    from . import correction
+    correction.queue(pid, reset=replace)
     return pid
 
 

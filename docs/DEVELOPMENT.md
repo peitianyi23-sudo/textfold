@@ -354,6 +354,30 @@ the original PDF remains available through Original. The reconstruction does not
 Existing stored imports are not silently rewritten: a bounded repair must preserve healthy units and map any atom
 renumbering into retained layers before regenerating affected captions, aggregates and links.
 
+### PDF extraction correction (personal)
+
+New PDF imports queue a full, page-by-page comparison against the retained `source.pdf` before levels are generated.
+The extracted source opens immediately with a checking notice. `correction.json` records progress and unresolved
+regions; a failed provider call remains a failed check. `correction-work.json` checkpoints completed pages so retry
+continues from there. Existing papers are enrolled only by an explicit `POST /api/correction` with `{paper, lang}`.
+There is no whole-library scan or rewrite. Questions wait for the checking workflow to finish.
+
+Each page is rendered with its neighbors. Proposed exact Markdown edits receive a separate image-backed review,
+including enlarged page quadrants; the reviewer must reject improvements to an author's actual printed notation.
+Corrections are rechecked against the PDF, for at most three local rounds; unlocatable or ambiguous changes stay
+explicit rather than triggering a human approval gate or indefinite requests. This is a bounded checking workflow,
+not a guarantee of error-free recognition. Full and generated levels share the resulting source, and generation and
+questions receive the remaining uncertainty. The original PDF and the Zotero producer cache are never changed.
+
+The selected provider must accept image input. The ChatGPT subscription bridge uses its native `/responses` route:
+its chat adapter does not reliably preserve images. An image failure must never fall back to a text-only check.
+
+Publication preserves a recoverable `correction-original/` copy of the extraction and layers. Source and layer
+publication share a reader snapshot lock. Healthy paragraph ladders/translations survive, with atom and paragraph
+references remapped; affected paragraphs/section aggregates and argument links are regenerated. User notes and
+conversations remain, with healthy anchors remapped and changed token offsets cleared so quoted-text anchoring
+can recover them. Original engine blocks and PDF geometry remain available for Original navigation.
+
 Without a ready cache, the page says it is waiting, checks again every three seconds, and offers retry and cancel.
 It does not assert that a conversion is running: new PDFs may be handled by Zotero's automatic conversion; older
 attachments need the reader to start parsing in Zotero. Once ready, the selected cache opens. Closing Zotero displays

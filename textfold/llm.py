@@ -30,7 +30,12 @@ SYSTEM = ("You compress the sections of research papers into nested zoom levels 
 def system_for(meta):
     """The system prompt for a document: a paper's as it always was; a text's in a text's words (kinds.py)."""
     from . import kinds
-    return kinds.adapt(SYSTEM, meta)
+    text = kinds.adapt(SYSTEM, meta)
+    issues = (meta.get("correction") or {}).get("issues")
+    if issues:
+        text += (" The PDF comparison left these source regions unresolved. Preserve relevant uncertainty in derived "
+                 "content; do not silently fill in missing symbols or words: " + json.dumps(issues, ensure_ascii=False))
+    return text
 
 
 # server-side refusal fallback ("default" routing) is accepted on these

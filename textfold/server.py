@@ -217,7 +217,7 @@ class Jobs:
             if stop.is_set() and stage != "done":   # a fetch that reports (bioRxiv's paced figures) ends here too
                 raise llm.Stopped()
             job.update(stage=stage, done=done, total=total)
-            if stage in ("ladder", "links", "translate", "done"):   # parsed: the reader can open it (in its own words)
+            if stage in ("PDF 校对中", "ladder", "links", "translate", "done"):   # extracted draft opens while PDF checking runs
                 job["readable"] = True
             if job["kind"] == "generate" and stage not in ("queued", "fetch") and (store.pdir(job["pid"]) / "meta.json").exists():
                 if not job.get("title"):   # a new paper's title, once it is parsed
@@ -351,6 +351,8 @@ class Jobs:
                     src = store.pdir(job["pid"]) / pdfdoc.kept_name(job["pid"], job["file"])   # the file itself, kept
                     if not src.exists():
                         src.write_bytes(Path(job["file"]).read_bytes())
+                    from . import correction
+                    correction.queue(job["pid"])
                     shutil.rmtree(out, ignore_errors=True)
                     if Path(job["file"]).parent == store.DATA / "uploads":
                         Path(job["file"]).unlink(missing_ok=True)
@@ -451,6 +453,7 @@ def reader_page(pid):
     layers = store.pdir(pid) / "layers"
     sig = tuple(sorted((f.name, f.stat().st_mtime) for f in layers.glob("*.json"))) if layers.exists() else ()
     sig += ((build.WEB / "template.html").stat().st_mtime,)  # a changed page template re-renders too
+    sig += tuple((f.name, f.stat().st_mtime_ns) for f in (store.pdir(pid) / "source.html", store.pdir(pid) / "correction.json") if f.exists())
     hit = PAGES.get(pid)
     if not hit or hit[0] != sig:
         hit = (sig, build.page(store.assemble(pid), app=True))
@@ -620,6 +623,16 @@ def make_handler(jobs):
                     except ValueError as e:
                         return self.json({"error": str(e)}, 400)
                     return self.json(zotero.status())
+                if u.path == "/api/correction":   # explicit repair of an existing imported PDF, including agent requests
+                    from . import correction
+                    pid = str(body.get("paper") or "")
+                    if not (store.valid_id(pid) and pid.startswith("pdf-") and
+                            (store.pdir(pid) / "source.pdf").is_file() and (store.pdir(pid) / "source.md").is_file()):
+                        return self.json({"error": "no imported PDF reading copy"}, 400)
+                    lang = body.get("lang") if body.get("lang") in langs.LANGS else "en"
+                    if not jobs._same(kind="generate", pid=pid):
+                        correction.queue(pid, reset=(correction.state(pid) or {}).get("status") == "done")
+                    return self.json({"paper": pid, "job": jobs.submit(pid, lang, False)})
                 if u.path == "/api/zotero/read":   # Zotero PDFs consume an existing cache; other item types keep their existing paths
                     lib, _, key = str(body.get("item") or "").rpartition("/")
                     lang = body.get("lang") if body.get("lang") in langs.LANGS else "en"

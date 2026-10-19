@@ -42,17 +42,32 @@ def generate(ref, lang, cfg, force=False, jobs=4, progress=lambda *a: None, log=
                 raise RuntimeError("no-html")  # the app shows its own sentence for this
             raise
     check()
+    from . import correction
+    if correction.pending(pid):
+        if cfg is None:
+            raise RuntimeError("No model is available for PDF checking")
+        correction.run(pid, cfg, progress=progress, stop=stop)
+        check()
     progress("parse", 0, 1)
     doc = store.parsed(pid)
     cache = d / "llm-cache"
     en = store.read(pid, "en")
-    if cfg is None and (en is None or force or (lang != "en" and store.read(pid, f"tr-{lang}") is None)):
+    if cfg is None and (en is None or en.get("incomplete") or force or (lang != "en" and store.read(pid, f"tr-{lang}") is None)):
         # fetched and parsed, so it can be read as written; its levels need a model
         raise RuntimeError("No model is available: install Claude Code, Codex or Pi, or add an API provider in the settings")
     model = llm.label(cfg) if cfg else ""
-    if en is None or (force and lang == "en"):
+    if en is None or en.get("incomplete") or (force and lang == "en"):
         check()
-        ladder.build(doc, task(cfg, "ladder"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("ladder", a, b), force=force, stop=stop)
+        only = None
+        if en and en.get("incomplete") and not force:
+            store.apply_en(doc, en)
+            only = {c["id"] for c in doc["chunks"] if c["id"] not in en["chunks"] or
+                    any(u not in en["units"] for u in c["units"])}
+        ladder.build(doc, task(cfg, "ladder"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("ladder", a, b), force=force, stop=stop, only=only)
+        if only is not None:
+            for uid, z in en["units"].items():
+                if uid in doc["units"]:
+                    doc["units"][uid]["lad"] = z
         check()
         progress("links", 0, 1)
         links.build(doc, task(cfg, "links"), cache, log=log, force=force)
@@ -62,9 +77,18 @@ def generate(ref, lang, cfg, force=False, jobs=4, progress=lambda *a: None, log=
         store.apply_en(doc, en)
     if lang != "en":
         tr = store.read(pid, f"tr-{lang}")
-        if force or tr is None or tr.get("base") != en["version"]:
+        if force or tr is None or tr.get("incomplete") or tr.get("base") != en["version"]:
             check()
-            translate.build(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("translate", a, b), force=force, stop=stop)
+            only = None
+            if tr and tr.get("incomplete") and not force:
+                store.apply_tr(doc, lang, tr)
+                only = {c["id"] for c in doc["chunks"] if c["id"] not in tr["chunks"] or
+                        any(u not in tr["units"] for u in c["units"])}
+            translate.build(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("translate", a, b), force=force, stop=stop, only=only)
+            if only is not None:
+                for uid, z in tr["units"].items():
+                    if uid in doc["units"]:
+                        doc["units"][uid].setdefault("tr", {})[lang] = z
             store.save_tr(doc, lang, en["version"], model)
     progress("done", 1, 1)
     return pid

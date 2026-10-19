@@ -83,6 +83,8 @@ def prompt_for(doc, chunk):
     head = f"{chunk['num']} {chunk['title']}".strip()
     tables = tables_of(doc, chunk)
     context = ("\n\nTables in this section, for context (they are not units; a takeaway may use what they show):\n\n" + "\n\n".join(tables)) if tables else ""
+    from . import correction
+    context += correction.equations(doc, {chunk["id"]})
     return kinds.adapt(f"""Paper: {doc['meta']['title']}
 
 Paper abstract, for context:
@@ -248,8 +250,8 @@ def section_ladder(o, topic_budget=3, doc=None, chunk=None):
     return {"take": take, "topic": locate(clean(o.get("topic")), take) or head_words(take, topic_budget)}
 
 
-def build(doc, cfg, cache_dir, jobs=4, log=print, progress=None, force=False, stop=None):
-    chunks = [c for c in doc["chunks"] if c["units"]]
+def build(doc, cfg, cache_dir, jobs=4, log=print, progress=None, force=False, stop=None, only=None):
+    chunks = [c for c in doc["chunks"] if c["units"] and (only is None or c["id"] in only)]
     cost, warnings, errors = 0.0, [], []
     model = llm.label(cfg)
 

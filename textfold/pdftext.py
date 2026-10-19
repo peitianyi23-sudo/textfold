@@ -489,4 +489,6 @@ def save(pid, file, name):
     kept = store.pdir(pid) / "source.pdf"
     if not kept.exists():
         kept.write_bytes(Path(file).read_bytes())
+    from . import correction
+    correction.queue(pid)
     return True

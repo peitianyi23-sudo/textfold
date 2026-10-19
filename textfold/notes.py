@@ -193,17 +193,22 @@ def prompt(doc, note, question, lang, earlier=(), ui=None):
     citable = ("Any paragraph number in the paper above or in the passages." if whole
                else "\n".join(f"[{tag(uid)}] {line(uid)}" for uid in cite))
     selected = f'The selected text:\n"{quote}"\n\n' if quote else ""
+    issues = (doc["meta"].get("correction") or {}).get("issues")
+    uncertainty = ("Unresolved PDF comparison issues (do not silently infer their missing content): " +
+                   json.dumps(issues, ensure_ascii=False) + "\n") if issues else ""
+    from . import correction
+    equation_context = correction.equations(doc, None if whole else {units[u].get("chunk") for u in cite})
     text = f"""A reader of this paper {"asked about it" if whole else "selected some text and asked about it"}.
 
 Paper: {doc['meta']['title']}
-Abstract: {abstract}
+{uncertainty}Abstract: {abstract}
 
 The paper, one line per section:
 {outline}
 
 {where}
 
-{selected}{body}
+{selected}{body}{equation_context}
 
 Passages from elsewhere in the paper that share words with the question:
 {passages or "(none)"}
@@ -287,6 +292,8 @@ def ask(pid, nid, question, spec, timeout=300, ui=None, req=None):
     """Answer a question in note nid's conversation with the model, add the turn to the note, and return the note.
     Stopped meanwhile (stop, by req): Stopped, and the note as it is."""
     doc = store.assemble(pid)
+    if (doc["meta"].get("correction") or {}).get("status", "done") != "done":
+        raise RuntimeError("PDF 校对尚未完成；完成后再根据校正稿提问。")
     with _LOCK:
         note = next((n for n in read(pid)["notes"] if n["id"] == nid), None)
     if not note:

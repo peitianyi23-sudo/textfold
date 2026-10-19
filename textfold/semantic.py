@@ -320,6 +320,8 @@ def _unfold_tables(soup, root):
         return len(el.get_text(" ", strip=True).split())
 
     for t in root.find_all("table"):
+        if "ltx_equation" in t.get("class", []):
+            continue   # restored long equations are mathematics, not a prose layout table
         if t.find_parent("table") is not None or t.parent is None:
             continue   # a table inside another: the outer one decides
         rows = [r for r in t.find_all("tr") if r.find_parent("table") is t]

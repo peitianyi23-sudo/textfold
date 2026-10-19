@@ -151,8 +151,8 @@ def assemble(u, o, atoms, lang, warn):
     return {"toks": toks, "sents": sents, "lad": {"brief": brief, "tn": tn, "topic": topic}}
 
 
-def build(doc, lang, cfg, cache_dir, jobs=4, log=print, progress=None, force=False, stop=None):
-    chunks = [c for c in doc["chunks"] if c["units"]]
+def build(doc, lang, cfg, cache_dir, jobs=4, log=print, progress=None, force=False, stop=None, only=None):
+    chunks = [c for c in doc["chunks"] if c["units"] and (only is None or c["id"] in only)]
     cost, warnings, errors = 0.0, [], []
     L = langs.name(lang)
     meta = doc["meta"]

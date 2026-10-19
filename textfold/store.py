@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+import threading
 from pathlib import Path
 
 from . import ladder
@@ -40,6 +41,7 @@ DATA = Path(os.environ.get("TEXTFOLD_DATA") or os.environ.get("PAPERFOLD_DATA") 
 HOME = Path.home() / ".textfold"   # the reader's settings and keys, outside the project folder
 # where they were kept under earlier names, newest first: PaperFold, Dynamic Reader (read, never removed)
 OLD_HOMES = (Path.home() / ".paperfold", Path.home() / ".dynamic-reader")
+SOURCE_LOCK = threading.RLock()   # publish a corrected source and its remapped layers as one reader snapshot
 
 
 # a paper's id: an arXiv id; or, stored when it was first opened, a document from this computer (local.py:
@@ -168,11 +170,21 @@ def languages(pid):
 
 
 def parsed(pid):
-    d = pdir(pid)
-    return parse((d / "source.html").read_text(), json.loads((d / "meta.json").read_text()))
+    with SOURCE_LOCK:
+        d = pdir(pid)
+        meta = json.loads((d / "meta.json").read_text())
+        f = d / "correction.json"
+        if f.exists():
+            meta["correction"] = json.loads(f.read_text(encoding="utf-8"))
+        return parse((d / "source.html").read_text(), meta)
 
 
 def assemble(pid, only=None):
+    with SOURCE_LOCK:
+        return _assemble(pid, only)
+
+
+def _assemble(pid, only=None):
     """The paper as the reader needs it, from the layers alone (no model call). only: the translations to carry (a page
     saved in one language), else all of them."""
     doc = parsed(pid)
