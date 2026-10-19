@@ -105,7 +105,7 @@ def page(doc, app=False, assets=None, saved=None, pdf=None):
     inline_images(doc, app)
     t = (WEB / "template.html").read_text()
     correction = doc["meta"].get("correction")
-    if correction:
+    if correction and correction["status"] != "done":
         status = correction["status"]
         issues = correction.get("issues") or []
         title = ("PDF 校对完成 · 有待核实位置" if issues else "PDF 校对完成") if status == "done" else (

@@ -456,11 +456,12 @@ comparison/review stage, or the HTTP status and retry wait; `timing.requests[*].
 Display equations participate in the section's progressive compression. `chunks[*].lad.equations` stores source
 block ids, separate `key` and `takeaway` decisions (Takeaway is a subset), meaning and necessary conditions.
 Translations keep those decisions and translate the explanations. Equation explanations at Key and Takeaway
-follow figure-caption alignment, including the Takeaway spine inset. Their **Original** disclosure switches from
-the short model explanation to the adjacent author paragraphs in the same section, preserving the source math.
-These are original explanatory context, rather than an invented author caption. Closing the disclosure restores
-the short explanation; changing the global level closes it too. Source paragraphs are rendered only when opened,
-and sandbox keyframes keep them closed. Essential equation concepts also inform the section takeaway and Topic;
+follow figure-caption alignment, including the Takeaway spine inset. Clicking their text switches in place
+from the short model explanation to the adjacent author paragraphs in the same section, using the same `morph`
+animation and local-open presentation as other text. There is no separate disclosure, arrow, or Original control.
+These are original explanatory context, rather than an invented author caption. Clicking again, Escape, or changing
+the global level restores the short explanation. Source paragraphs are rendered only when opened, and sandbox
+keyframes keep them closed. Essential equation concepts also inform the section takeaway and Topic;
 Topic remains a concept map without displaying formulas. The reader displays selected original equation
 HTML directly at Key/Takeaway, including long formulas and author numbers; author rows stay intact and wider
 formulas scroll within their own block. Topic stays unchanged. Existing layers acquire selection when regenerated;
@@ -527,3 +528,7 @@ Atoms (formulas, citations, cross-references, footnotes) are numbered in reading
 them by number. A parser change that reads more of a page (description lists, October 2026) renumbers every atom after
 the new ones, so a paper generated before it needs its layers made again, or its atom numbers mapped from the old parse
 to the new one by content and order.
+
+Completed PDF checking keeps its receipt in paper metadata and omits the fixed correction banner. Unfinished,
+interrupted and failed checks retain the existing range/resume controls. Completion reloads the reader through
+the existing job watcher, so the banner disappears automatically.

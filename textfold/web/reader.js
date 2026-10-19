@@ -368,17 +368,12 @@
               if (near.k !== 'eq') break;
             }
           }
-          const caption = h('details', 'eq-caption');
+          const caption = h('div', 'eq-caption');
           e._caption = caption;
-          const summary = h('summary', 'eq-meaning'); summary.dataset.id = `eq-meaning:${b.id}`;
-          summary.append(h('span', 'eq-short'), h('span', 'eq-toggle'));
-          summary.addEventListener('click', (event) => { if (!context.length) event.preventDefault(); });
+          const summary = h('div', 'eq-meaning'); summary.dataset.id = `eq-meaning:${b.id}`;
+          summary.append(h('span', 'eq-short'));
           caption.append(summary, h('div', 'eq-source'));
           e._context = context;
-          caption.addEventListener('toggle', () => {
-            renderEquationSource(e);
-            capEpoch++; geom = null; warmSoon();
-          });
           e.append(caption);
         }
         e.dataset.l = level; lvBlocks.push(e);
@@ -400,7 +395,9 @@
   function renderEquationSource(e) {
     const source = e.querySelector('.eq-source');
     source.replaceChildren();
-    if (!e.querySelector('.eq-caption').open) return;
+    const open = localLevel.has(`eq:${e.dataset.eq}`);
+    e._caption.classList.toggle('local-open', open);
+    if (!open) return;
     for (const uid of e._context) {
       const p = h('p', null, textHtml(uid, 4)); p.dataset.sourceU = uid;
       source.append(p); texify(p);
@@ -422,7 +419,6 @@
       texify(meaning);
       const caption = e.querySelector('.eq-caption');
       caption.hidden = !row;
-      e.querySelector('.eq-toggle').textContent = e._context.length ? T[ui].compare : '';
       caption.classList.toggle('has-source', !!e._context.length);
       renderEquationSource(e);
     }
@@ -503,7 +499,7 @@
   const order = new Map();   // uid -> position in the paper
   const drawBlock = (x) => {
     x.dataset.l = level; x._stale = false;
-    if (x._caption) x._caption.open = false;
+    if (x._caption) renderEquationSource(x);
   };
   const redraw = (x) => { if (typeof x === 'string') renderUnit(x, false); else drawBlock(x); };
   const elOf = (x) => (typeof x === 'string' ? unitEl.get(x) : x);
@@ -1177,7 +1173,7 @@
         const el = node.cloneNode(true);
         if (lv.has(node)) { el.dataset.l = L; el._pos = node._pos; }
         const caption = cl.contains('eq') && el.querySelector('.eq-caption');
-        if (caption) { caption.open = false; caption.querySelector('.eq-source').replaceChildren(); }
+        if (caption) { caption.classList.remove('local-open'); caption.querySelector('.eq-source').replaceChildren(); }
         return el;
       }
       if (cl.contains('side') || cl.contains('lside')) return node.cloneNode(true);
@@ -1512,6 +1508,16 @@
     morph(() => {
       if (localLevel.has(uid)) localLevel.delete(uid); else localLevel.set(uid, 4);
       renderUnit(uid, true);
+    }, { el, y: r.top, frac: 0 });
+  }
+
+  function toggleEquation(el) {
+    if (busy || !el._context.length) return;
+    const r = el.getBoundingClientRect(), key = `eq:${el.dataset.eq}`;
+    morph(() => {
+      if (localLevel.has(key)) localLevel.delete(key); else localLevel.set(key, 4);
+      renderEquationSource(el);
+      capEpoch++;
     }, { el, y: r.top, frac: 0 });
   }
 
@@ -3478,6 +3484,8 @@ math { font-size: 1.05em; }
     if (e.target.closest('a, details, summary')) return;
     if (level === 4 && !localLevel.size) return;
     if (String(getSelection()).length) return;
+    const equation = e.target.closest('.eq-caption.has-source');
+    if (equation) { toggleEquation(equation.closest('.eq')); return; }
     const el = e.target.closest('.u');
     if (!el || !el.dataset.u) return;
     if (level === 0 && !localLevel.size) {

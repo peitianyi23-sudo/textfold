@@ -308,16 +308,9 @@ figure.fig[data-l="0"] .flabel { font-weight: 600; color: var(--muted); }
 .eq[data-l="2"] .eq-caption:not([hidden]), .eq[data-l="1"] .eq-caption:not([hidden]) { display: block; }
 /* Match figure captions, including the space beside the Takeaway spine. */
 .doc[data-level="1"] .eq-caption { padding-left: 22px; }
-.eq-meaning { list-style: none; }
-.eq-caption.has-source .eq-meaning { cursor: pointer; }
-.eq-meaning::-webkit-details-marker { display: none; }
-.eq-meaning:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
-.eq-toggle { color: var(--muted); font-size: 12px; white-space: nowrap; margin-left: .6em; }
-.eq-caption:not(.has-source) .eq-toggle { display: none; }
-.eq-toggle::before { content: '▸ '; }
-.eq-caption[open] .eq-toggle { margin-left: 0; }
-.eq-caption[open] .eq-toggle::before { content: '▾ '; }
-.eq-caption[open] .eq-short { display: none; }
+.eq-caption.has-source { cursor: pointer; }
+.eq-caption.local-open { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-left: -15px; margin-right: -15px; box-shadow: 0 8px 28px -18px rgba(40, 30, 10, .35); }
+.eq-caption.local-open .eq-short { display: none; }
 .eq-source { font-family: var(--serif); }
 .eq-source p { margin: 8px 0 0; }
 .eq table { max-width: none; } /* preserve author rows and numbering; overflow stays formula-local */
