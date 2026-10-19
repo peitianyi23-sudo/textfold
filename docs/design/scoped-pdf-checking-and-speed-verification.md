@@ -118,6 +118,19 @@ Raw original/trial copies, model request timings, provider failures, proposal/ch
 recovery copies, UI screenshots, generation records and GPU traces remain in the managed worktree's ignored
 `launch/scoped-pdf/` folder. Preserve the older `pdf-speed-equations` worktree and its evidence.
 
-Daily rollout receipt and final commit are recorded after validation. This delivery updates code; it does not copy
-experimental sources/layers into the daily library. The separate cache-opening incident is **unresolved**. No push
-or upstream PR is requested or performed.
+Signed-off implementation commit `c21e91ceb938181a3a869cd9ba078c554b874299` was fast-forward merged into `personal`.
+The primary checkout stayed on `personal`. Its pre-existing glossary content and the two unrelated design drafts
+were preserved byte for byte; only the agreed Correction scope entry is included in the implementation commit.
+
+Immediately before refreshing the daily service, both generation and PDF-engine queues were empty. The listener
+was the existing primary-checkout **TextFold Personal** scheduled-task launcher, using
+`C:/Users/admin/AppData/Local/TextFold/personal`. That same owner restarted PID 85420 as 41236. Served reader/app JS
+bytes match the merged source and the selected model is unchanged. The bridge on 10531 was reused and not restarted.
+The daily selected papers' original PDF, source, notes and all layer files remain byte-identical across deployment.
+
+An actual browser on **3017** confirmed existing Key/Takeaway selections 8/4 and 8/2, correct complete physical-page
+coverage 4/4 and 6/6, zero JavaScript errors, and no queued/running jobs. `daily-service.json`, `daily-check.json` and
+the daily screenshots retain the receipts. The controlled isolated server was stopped after validation.
+
+This delivery updates code; it does not copy experimental sources/layers into the daily library. The separate
+cache-opening incident is **unresolved**. No push or upstream PR was performed.
