@@ -29,7 +29,8 @@ from unittest.mock import patch
 from textfold import engine, models, pdfdoc, store, zotero, zotero_cache
 
 ROOT = Path(__file__).resolve().parents[1]
-PDF = b"%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n"
+from tests.test_pdftext import typeset
+PDF = typeset([(12, "A physical PDF page for the cache import fixture.")])
 SNAPSHOT = ("<!doctype html><html><head><title>Snapshot 2024</title></head><body><article><h1>Snapshot 2024</h1>"
             "<p>The first paragraph of a page Zotero saved, long enough to be read as the article it is.</p>"
             "<h2>Its method</h2><p>A second paragraph, under a heading of its own, so the page has a shape.</p></article></body></html>")

@@ -62,7 +62,7 @@ def prompt_for(doc, chunk, lang):
     sec = chunk.get("lad")
     head = f"{chunk['num']} {chunk['title']}".strip()
     title_rule = f"\n- paper_title: the paper's title in {L}." if chunk["id"] == "abstract" else ""
-    return kinds.adapt(f"""Translate one section of a research paper into {L} for a zoomable reader, and write its short zoom levels in {L}.
+    return kinds.adapt(doc['meta'].get('scope_context', '') + f"""Translate one section of a research paper into {L} for a zoomable reader, and write its short zoom levels in {L}.
 
 Paper: {doc['meta']['title']}
 

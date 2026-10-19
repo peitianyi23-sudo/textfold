@@ -447,6 +447,7 @@
     const lad = (trOf(c) && trOf(c).lad) || c.lad;
     st.replaceChildren();
     if (!lad) return;
+    if (lad.scope_partial) st.append(h('span', 'scope-label', lang === 'zh' ? '已核查范围摘要 · ' : 'Selected-range summary · '));
     const mk = stakeMarks(c.id);
     lad.take.forEach((tk, i) => {
       const s = tokEl(tk, `${lad.topic.includes(i) ? 'lead' : ''}${mk && mk.has(i) ? ' hl' : ''}`);

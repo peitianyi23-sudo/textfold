@@ -196,6 +196,11 @@ def prompt(doc, note, question, lang, earlier=(), ui=None):
     issues = (doc["meta"].get("correction") or {}).get("issues")
     uncertainty = ("Unresolved PDF comparison issues (do not silently infer their missing content): " +
                    json.dumps(issues, ensure_ascii=False) + "\n") if issues else ""
+    coverage = doc["meta"].get("correction") or {}
+    if coverage and coverage.get("status") != "done":
+        uncertainty += ("Only physical PDF pages " + str(coverage.get("checked", [])) +
+                        " have completed PDF checking. Other passages/dependencies are UNCHECKED extraction. "
+                        "State any material limitation; do not infer a whole-document conclusion from partial coverage.\n")
     from . import correction
     equation_context = correction.equations(doc, None if whole else {units[u].get("chunk") for u in cite})
     text = f"""A reader of this paper {"asked about it" if whole else "selected some text and asked about it"}.
@@ -292,7 +297,7 @@ def ask(pid, nid, question, spec, timeout=300, ui=None, req=None):
     """Answer a question in note nid's conversation with the model, add the turn to the note, and return the note.
     Stopped meanwhile (stop, by req): Stopped, and the note as it is."""
     doc = store.assemble(pid)
-    if (doc["meta"].get("correction") or {}).get("status", "done") != "done":
+    if (doc["meta"].get("correction") or {}).get("status", "done") != "done" and not (doc["meta"].get("correction") or {}).get("checked"):
         raise RuntimeError("PDF 校对尚未完成；完成后再根据校正稿提问。")
     with _LOCK:
         note = next((n for n in read(pid)["notes"] if n["id"] == nid), None)

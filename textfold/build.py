@@ -109,15 +109,41 @@ def page(doc, app=False, assets=None, saved=None, pdf=None):
         status = correction["status"]
         issues = correction.get("issues") or []
         title = ("PDF 校对完成 · 有待核实位置" if issues else "PDF 校对完成") if status == "done" else (
-            "PDF 校对未完成 · 当前为提取稿" if status in ("error", "stopped") else "PDF 校对中 · 当前为提取稿")
+            "PDF 校对未完成 · 当前为提取稿" if status in ("error", "stopped") else
+            "请选择 PDF 核查范围 · 当前为提取稿" if status == "awaiting-scope" else
+            "所选范围校对完成 · 全文尚未完成" if status == "scope-done" else "PDF 校对中 · 当前为提取稿")
         detail = "".join("<li>" + escape(x["text"]) + "</li>" for x in issues)
         if correction.get("error"):
             detail += "<li>" + escape(correction["error"]) + "</li>"
+        checked = correction.get("checked", list(range(1, correction.get("total", 0) + 1)) if status == "done" else [])
+        selected_scope = correction.get("requested_scope") or correction.get("scope") or ({"pages":checked} if status == "done" else {})
+        selected = selected_scope.get("pages", [])
+        chapter = selected_scope.get("chapter_pages", [])
+        coverage = (f'已检查物理页：{escape(", ".join(map(str, checked)) or "无")}。'
+                    f'当前选择：{escape(", ".join(map(str, selected)) or "无")}。')
+        if chapter and not set(chapter) <= set(checked):
+            coverage += ' 所选章节尚未完整核查；本次仅处理最多 30 页。'
+        controls = ''
+        if app:
+            chapters = ''.join(f'<option value="{escape(c["id"], quote=True)}">{escape(c["title"] or c["id"])}</option>'
+                               for c in doc["chunks"] if c["id"] in correction.get("chapters", {}))
+            controls = ('<form id="pdf-scope"><p>选择物理页码（含封面、参考文献及附录）。滚动不会启动核查。</p>'
+                        '<label>范围 <input name="ranges" placeholder="1-5, 9-12" aria-label="物理页范围" style="width:150px"></label> '
+                        '<button type="submit">核查所选页</button>'
+                        + (f'<p><label>章节 <select name="chapter" aria-label="核查章节">{chapters}</select></label> '
+                           '<label>起始物理页 <input name="position" type="number" min="1" style="width:60px"></label> '
+                           '<button type="button" data-scope="chapter">从此处核查最多 30 页</button></p>' if chapters else
+                           '<p>无法可靠确定章节页界时，请选择页码范围。</p>') +
+                        '<p><button type="button" data-scope="document">明确核查全文（每批最多 30 页）</button> '
+                        '<button type="button" data-scope="resume">继续已选范围</button></p>'
+                        '<p role="status" id="pdf-scope-message"></p></form>')
         banner = (f'<details aria-label="PDF 校对" style="position:fixed;top:64px;right:16px;z-index:50;'
-                  f'max-width:360px;max-height:40vh;overflow:auto;padding:8px 12px;border:1px solid #bdb4e6;'
+                  f'box-sizing:border-box;width:min(360px,calc(100% - 32px));max-height:40vh;overflow:auto;padding:8px 12px;border:1px solid #bdb4e6;'
                   f'border-radius:8px;background:var(--surface);color:var(--ink);font:13px/1.5 system-ui">'
                   f'<summary>{escape(title)}</summary><p>已检查 {correction.get("done", 0)}/{correction.get("total", 0)} 页。'
-                  f'对照原始 PDF 校正；疑点不自动补写，可在阅读时请 agent 处理。</p><ul>{detail}</ul></details>')
+                  f'{coverage} 对照原始 PDF 校正；疑点不自动补写。</p>'
+                  f'<p>局部摘要仅覆盖已核查内容；范围外依赖来自未核查提取稿。未能定位完整页界的段落须等待其全部页核查。</p>'
+                  f'{controls}<ul>{detail}</ul></details>')
         t = t.replace('<main id="doc"', banner + '<main id="doc"')
     if app:
         head = '<script src="/static/theme.js"></script>' + fonts_head(APP_ASSETS) + '<link rel="stylesheet" href="/static/reader.css"><link rel="stylesheet" href="/static/app.css">'

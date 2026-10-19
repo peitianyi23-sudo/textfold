@@ -1,7 +1,7 @@
 """PDF-backed correction of the imported reading copy, before generating its levels.
 
-The original extraction and layers remain in correction-original/. A resumable draft is checked
-page by page and published only after the whole PDF has been visited. Zotero's cache is never written.
+The original extraction and layers remain in correction-original/. Reviewed page batches publish
+a consistent reading source, with physical coverage kept separately from scope selection.
 """
 import copy
 import difflib
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-from . import llm, llm_openai, markdown, semantic, store
+from . import llm, llm_openai, markdown, scopes, semantic, store
 from .parse import parse
 from .tokens import plain
 
@@ -78,14 +78,73 @@ def queue(pid, reset=False):
     """Called only for a newly imported PDF, or an explicit repair request for an existing one."""
     d = store.pdir(pid)
     if reset:
+        # A deliberate engine reconversion replaces the extraction, so the old
+        # draft and coverage no longer describe that source. Scope changes don't reset.
         (d / "correction-work.json").unlink(missing_ok=True)
-    if pid.startswith("pdf-") and (d / "source.md").exists() and (reset or not state(pid)):
-        _write(d, "correction.json", {"status": "queued", "done": 0, "total": 0, "issues": []})
+    if pid.startswith("pdf-") and (d / "source.md").exists() and (d / "source.pdf").exists() and (reset or not state(pid)):
+        count = scopes.total(pid)
+        previous = {} if reset else (state(pid) or {})
+        _write(d, "correction.json", {**previous, "status": "queued" if count <= scopes.LIMIT else "awaiting-scope",
+                "done": previous.get("done", 0), "total": count, "issues": previous.get("issues", []),
+                "checked": previous.get("checked", []),
+                "scope": {"kind": "document", "pages": list(range(1, count + 1))} if count <= scopes.LIMIT else None})
+
+
+def prepare_scope(pid):
+    """Background preparation, after the extraction has become readable."""
+    s = state(pid)
+    if s and s["status"] == "awaiting-scope" and "content_pages" not in s:
+        doc = store.parsed(pid)
+        mapping = scopes.content_pages(doc, scopes.page_texts(pid))
+        s.update(content_pages=mapping, chapters=scopes.chapter_pages(doc, mapping))
+        _write(store.pdir(pid), "correction.json", s)
 
 
 def pending(pid):
     s = state(pid)
-    return bool(s and s["status"] != "done")
+    return bool(s and s["status"] not in ("done", "awaiting-scope", "scope-done"))
+
+
+def choose(pid, request):
+    s = state(pid)
+    if not s:
+        queue(pid)
+        s = state(pid)
+    return scopes.select(request, s.get("total") or scopes.total(pid), s.get("chapters"))
+
+
+def review_crops(edits, image, padding=.04):
+    """Merge touching context rectangles; each edit still receives its own review decision."""
+    boxes = []
+    for e in edits:
+        box = e.get("box", [])
+        if len(box) != 4 or not (0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1):
+            box = [0, 0, 1, 1]
+        box = [max(0, box[0]-padding), max(0, box[1]-padding), min(1, box[2]+padding), min(1, box[3]+padding)]
+        while True:
+            hit = next((b for b in boxes if box[0] <= b[2] and b[0] <= box[2] and box[1] <= b[3] and b[1] <= box[3]), None)
+            if hit is None:
+                break
+            boxes.remove(hit)
+            box = [min(box[0],hit[0]),min(box[1],hit[1]),max(box[2],hit[2]),max(box[3],hit[3])]
+        boxes.append(box)
+    w, h = image.size
+    crops = []
+    for box in boxes:
+        crop = image.crop((int(box[0]*w),int(box[1]*h),int(box[2]*w),int(box[3]*h)))
+        buf = io.BytesIO()
+        crop.save(buf, format="PNG")
+        crop.close()
+        crops.append(buf.getvalue())
+    return crops
+
+
+def missing_displays(result):
+    # A proposed restored tag still goes through independent review. It does not need
+    # a second restoration request merely because the inventory described the old text.
+    proposed = "\n".join(e["after"] for e in result["edits"])
+    return [r for r in result.get("displays", []) if not r["present"] and
+            not re.search(r"\\tag\{" + re.escape(r["number"]) + r"\}", proposed)]
 
 
 def patches(text, edits):
@@ -194,6 +253,9 @@ def reconcile(old, new, layers, notes):
         affected.update(new["units"][u]["chunk"] for u in after if u not in layer["units"])
         layer["chunks"] = {c: remap(z) for c, z in layer.get("chunks", {}).items()
                            if c not in affected and atom_ids(z) <= atom_map.keys()}
+        if "scope_units" in layer:
+            layer["scope_units"] = {c: [same[u] for u in us if u in same]
+                                    for c, us in layer["scope_units"].items() if c not in affected}
         if name == "en":
             layer["edges"] = []  # argument links are rebuilt from the corrected source
         layer["incomplete"] = True
@@ -293,14 +355,22 @@ def page_ranges(text, page_texts):
     return out
 
 
-def run(pid, spec, progress=lambda *a: None, stop=None):
+def run(pid, spec, progress=lambda *a: None, stop=None, scope=None, concurrency=2):
     s = state(pid)
-    if not s or s["status"] == "done":
+    if scope is not None:
+        if not s:
+            queue(pid)
+            s = state(pid)
+        s.update(scope=scope, status="queued")
+        _write(store.pdir(pid), "correction.json", s)
+    if not s or s["status"] in ("done", "awaiting-scope", "scope-done"):
         return
     d = store.pdir(pid)
     work = d / "correction-work.json"
     draft = json.loads(work.read_text(encoding="utf-8")) if work.exists() else {
         "text": (d / "source.md").read_text(encoding="utf-8"), "page": 0, "history": [], "issues": []}
+    draft.setdefault("checked", list(range(1, draft.get("page", 0) + 1)))
+    draft.setdefault("displays", {})
     import pypdfium2 as pdfium
     from .engine import PDFIUM
     started = time.perf_counter()
@@ -310,6 +380,8 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
     with PDFIUM:
         pdf = pdfium.PdfDocument(str(d / "source.pdf"))
         total = len(pdf)
+    selected = (s.get("scope") or {"pages": list(range(1, total + 1))})["pages"]
+    batch = [p - 1 for p in selected if p not in draft["checked"]][:scopes.LIMIT]
     def check():
         if stop is not None and stop.is_set():
             raise llm.Stopped()
@@ -358,13 +430,21 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
         history_start = len(draft["history"])
         ranges = page_ranges(snapshot, pages)
         metrics["mapping_seconds"] = time.perf_counter() - now
-        s.update(status="checking", done=draft["page"], total=total, error="")
+        s.update(status="checking", done=len(draft["checked"]), total=total, error="", checked=draft["checked"])
         _write(d, "correction.json", s)
         def first(page):
             check()
             image = picture(page)
             a, b = ranges[page]
             local = snapshot[a:b]
+            proposals = d / "correction-proposals"
+            proposals.mkdir(exist_ok=True)
+            saved = proposals / f"{page+1}.json"
+            if saved.exists():
+                cached = json.loads(saved.read_text(encoding="utf-8"))
+                if cached["local"] == local:
+                    metrics.setdefault("reused_comparisons", []).append(page+1)
+                    return cached["result"], image, local
             prompt = (f"Check physical PDF page {page + 1} of {total} IN FULL: every paragraph, formula, caption, "
                 "table and reading-order transition. The image is this page. The extraction below includes surrounding "
                 "paragraph context. Correct only differences visible on THIS page, preserving printed author symbols "
@@ -383,32 +463,33 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                 "Report only real extraction omissions or unreadable/ambiguous regions in issues; never infer from "
                 "physics. Context outside this page is expected, not an issue. Do not report absence of captions/tables "
                 "on a page that has none.\nCURRENT extraction:\n" + local)
-            return request(prompt, SCHEMA, [png(image)], page, "full-page"), image, local
-        # Only two first comparisons in flight; do not queue a whole library of model requests.
-        with ThreadPoolExecutor(max_workers=2) as pool:
+            result = request(prompt, SCHEMA, [png(image)], page, "full-page")
+            # A stopped scope may receive a useful comparison after its consumer stops.
+            # Keep it as a proposal, never as completed coverage or a source publication.
+            _write(proposals, saved.name, {"local":local, "result":result})
+            return result, image, local
+        # A bounded window and a <=30-page batch, never a whole-book request backlog.
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
             pending = {}
-            begin = draft["page"]
-            for page in range(begin, min(total, begin + 2)):
+            for page in batch[:concurrency]:
                 pending[page] = pool.submit(first, page)
-            for page in range(begin, total):
-                progress("PDF 校对中", page, total)
+            for index, page in enumerate(batch):
+                progress("PDF 校对中", len(draft["checked"]), total)
                 result, image, local = pending.pop(page).result()
                 check()
                 for change in draft["history"][history_start:]:
                     for edit in change["edits"]:
                         if edit["before"] in local:
                             local = local.replace(edit["before"], edit["after"], 1)
-                missing = [r for r in result.get("displays", []) if not r["present"]]
+                for row in result.get("displays", []):
+                    seen = draft["displays"].setdefault(row["number"], [])
+                    if page + 1 not in seen:
+                        seen.append(page + 1)
+                inventory = result.get("displays", [])
+                missing = missing_displays(result)
                 if missing:
                     # Explicit inventory prevents a readable omitted display being left as a vague issue.
-                    crops = []
-                    for r in missing:
-                        box = r["box"]
-                        if len(box) != 4 or not (0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1):
-                            box = [0, 0, 1, 1]
-                        w, h = image.size
-                        crops.append(png(image.crop((int(max(0,box[0]-.05)*w), int(max(0,box[1]-.05)*h),
-                                                    int(min(1,box[2]+.05)*w), int(min(1,box[3]+.05)*h)))))
+                    crops = review_crops(missing, image, .05)
                     extra = request("Restore the following numbered display equations, including every line and printed "
                         "number as \\tag{n}, from the supplied original PDF regions. They were inventoried as incomplete "
                         "in CURRENT extraction. Return exact unique insertion/replacement anchors. Do not repeat edits "
@@ -437,23 +518,13 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                             rejected.append({"before": edit["before"], "error": str(e)})
                     draft["issues"] = [x for x in draft["issues"] if x["page"] != page + 1]
                     draft["issues"].extend({"page": page + 1, "text": x} for x in result["issues"])
-                    if not candidates and not rejected:
-                        break
-                    crops = []
-                    for e in candidates:
-                        box = e.get("box", [])
-                        if len(box) != 4 or not (0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1):
-                            box = [0, 0, 1, 1]
-                        # Include surrounding lines, not just the symbol claimed to be wrong.
-                        w, h = image.size
-                        box = [max(0, box[0]-.04), max(0, box[1]-.04), min(1, box[2]+.04), min(1, box[3]+.04)]
-                        crops.append(png(image.crop((int(box[0]*w), int(box[1]*h), int(box[2]*w), int(box[3]*h)))))
+                    crops = review_crops(candidates, image)
                     if candidates:
                         now = time.perf_counter()
                         rec = {"page":page+1,"stage":"independent-region-review","images":len(crops)}
                         try:
                             accepted, review_issues = review(candidates, crops, spec,
-                                f"{page+1}, one context crop per indexed edit; check the corrected result against the printed region")
+                                f"{page+1}, merged context crops covering ALL indexed edits; check the corrected result against the printed region")
                         except Exception as e:
                             rec["error"] = str(e)
                             raise
@@ -478,6 +549,23 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                                 draft["issues"].append({"page":page+1,"text":issue["before"][:180]+": "+issue["reason"]})
                     else:
                         accepted = []
+                    remaining = [r for r in inventory if not re.search(
+                        r"\\tag\*?\s*\{" + re.escape(r["number"]) + r"\}", draft["text"])]
+                    if remaining:
+                        if attempt == 2:
+                            draft["issues"].append({"page":page+1,"text":"Numbered displays still need restoration: " +
+                                                   ", ".join(r["number"] for r in remaining)})
+                        else:
+                            # An initial proposal may contain the missing number but fail
+                            # independent review. Its mere presence in a proposal isn't repair.
+                            result = request("Restore ONLY these still-missing numbered displays/labels from the original "
+                                "PDF regions. The earlier proposal failed independent review; use its visible evidence "
+                                "below to correct the actual printed symbols as well as the label. Return unique exact "
+                                "replacement anchors in CURRENT extraction, preserving author notation.\n" +
+                                json.dumps({"displays":remaining,"review":feedback},ensure_ascii=False) +
+                                "\nCURRENT extraction:\n"+local, SCHEMA, review_crops(remaining,image,.05), page,
+                                "missing-display-recovery")
+                            continue
                     # The independent call has already inspected every accepted after against PDF.
                     # Revisit only rejected/stale locations, not an unchanged full page a second time.
                     if not rejected:
@@ -491,21 +579,38 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                         json.dumps({"rejected":rejected,"independent_review":feedback},ensure_ascii=False)+
                         "\nCURRENT extraction:\n"+local, SCHEMA, [png(image)], page, "overlap-resolution")
                 draft["page"] = page + 1
+                draft["checked"] = sorted(set(draft["checked"]) | {page + 1})
                 _write(d, "correction-work.json", draft)
-                s.update(done=page+1, issues=draft["issues"])
+                s.update(done=len(draft["checked"]), issues=draft["issues"])
                 _write(d, "correction.json", s)
                 image.close()
-                if page + 2 < total:
-                    pending[page+2] = pool.submit(first, page+2)
+                check()
+                if index + concurrency < len(batch):
+                    nxt = batch[index + concurrency]
+                    pending[nxt] = pool.submit(first, nxt)
         publish(pid, draft["text"], s)
-        s.update(status="done", model=spec["id"], edits=sum(len(h["edits"]) for h in draft["history"]), finished=store.stamp())
-        progress("PDF 校对中", total, total)
+        doc = store.parsed(pid)
+        mapping = scopes.content_pages(doc, pages, draft["displays"])
+        s.update(checked=draft["checked"], content_pages=mapping, chapters=scopes.chapter_pages(doc, mapping))
+        complete = set(selected) <= set(draft["checked"])
+        s.update(status="done" if len(draft["checked"]) == total else "scope-done" if complete else "queued",
+                 model=spec["id"], edits=sum(len(h["edits"]) for h in draft["history"]), finished=store.stamp())
+        progress("PDF 校对中", len(draft["checked"]), total)
     except Exception as e:
+        # Reviewed pages survive a stop/provider failure as a consistent reading source.
+        # Unreviewed in-flight proposals never enter the checkpoint.
+        if draft["checked"]:
+            publish(pid, draft["text"], s)
+            doc = store.parsed(pid)
+            mapping = scopes.content_pages(doc, pages, draft["displays"])
+            s.update(checked=draft["checked"], content_pages=mapping, chapters=scopes.chapter_pages(doc, mapping))
         s.update(status="stopped" if isinstance(e,llm.Stopped) else "error", error=str(e))
         raise
     finally:
         with PDFIUM:
             pdf.close()
         metrics["wall_seconds"] = time.perf_counter()-started
+        if s.get("timing"):
+            s.setdefault("previous_timings", []).append(s["timing"])
         s["timing"] = metrics
         _write(d,"correction.json",s)

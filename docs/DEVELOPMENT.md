@@ -356,14 +356,37 @@ renumbering into retained layers before regenerating affected captions, aggregat
 
 ### PDF extraction correction (personal)
 
-New PDF imports queue a full, page-by-page comparison against the retained `source.pdf` before levels are generated.
-The extracted source opens immediately with a checking notice. `correction.json` records progress and unresolved
-regions; a failed provider call remains a failed check. `correction-work.json` checkpoints completed pages so retry
-continues from there. Existing papers are enrolled only by an explicit `POST /api/correction` with `{paper, lang}`.
-There is no whole-library scan or rewrite. Questions wait for the checking workflow to finish.
+New PDF imports of **30 physical pages or fewer** queue full checking against retained `source.pdf`. The count
+includes front matter, references and appendices. Longer documents open their extraction without automatic model
+work. The PDF notice offers explicit physical page ranges (including noncontiguous ranges), the author's reliably
+mapped heading sections, and an explicit whole-document action. Opening, scrolling or navigating never selects work.
+An over-limit section starts at the chosen reading position and checks at most 30 pages; its remaining pages stay
+unchecked. Explicit ranges and the whole document proceed in resumable batches of at most 30, generating checked
+content between batches. Partial aggregates say **Selected-range summary**; whole-section aggregates wait for all
+required content. Unmapped/ambiguous passages require whole-document coverage. Page-to-reading navigation is not
+used as evidence for coverage. PDF text/extractor text must uniquely bound both ends of a paragraph, including all
+pages of a continuation; numbered displays also use the actual full-page comparison inventory.
 
-Each page is rendered with its neighbors. Proposed exact Markdown edits receive a separate image-backed review,
-including enlarged page quadrants; the reviewer must reject improvements to an author's actual printed notation.
+`correction.json` records physical coverage, scope, mapping, uncertainties and timings; `correction-work.json`
+checkpoints reviewed results. `correction-request.json` keeps the latest explicit selection separately so an old
+worker cannot overwrite it. Switching scopes stops the old job's scheduling, retains reviewed pages and prioritizes
+the new selection through the single generation worker. Returned first comparisons survive in
+`correction-proposals/`; only an identical extraction context permits reuse, and proposed edits still need independent
+review. Provider failure is unfinished checking. A process restart retains these files, but does not start model
+jobs on its own: **Continue selected range** resumes explicitly.
+
+`POST /api/correction` accepts `{paper, lang, scope}`. A scope is `{kind:"document"}`,
+`{kind:"range", ranges:[[1,5],[9,12]]}`, or `{kind:"chapter", chapter:"<section id>", position:5}` (physical pages).
+Without a scope, an unenrolled long PDF returns `needs:"correction-scope"`; a previously selected interrupted scope
+can resume. Existing papers are enrolled explicitly; there is no whole-library rewrite. Questions require at least
+some completed coverage and carry explicit unchecked provenance for the rest. Selected-range generation receives
+available outside extraction as unchecked context, never recursively checking dependencies.
+
+Every selected page receives a full comparison with surrounding extraction context. Proposed exact Markdown edits
+receive a separate image-backed review using merged touching/overlapping context crops; every edit still receives
+its own decision. A numbered restoration already in the initial proposal does not trigger another restoration call.
+If independent review rejects it and the number remains missing, targeted restoration continues using that feedback.
+The reviewer must reject improvements to an author's actual printed notation.
 Corrections are rechecked against the PDF, for at most three local rounds; unlocatable or ambiguous changes stay
 explicit rather than triggering a human approval gate or indefinite requests. This is a bounded checking workflow,
 not a guarantee of error-free recognition. Full and generated levels share the resulting source, and generation and
@@ -413,7 +436,8 @@ found unlawful without consent in 2022.)
 
 ## Smoothness is a rule
 
-PDF correction compares every physical page, with two page comparisons in flight. Reading-order text anchors
+PDF correction compares every physical page in the selected scope, with two page comparisons in flight (the
+three-request experiment failed provider acceptance and was not adopted). Reading-order text anchors
 localize Markdown even when it came from a finalized cache without block coordinates; scans can use extractor
 blocks, and an unmapped page keeps full context. Parallel comparisons share a snapshot; exact replacements are
 resolved against the current draft before publication. Changed paragraphs/equations are independently checked

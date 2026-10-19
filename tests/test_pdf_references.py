@@ -1,4 +1,5 @@
 """Reference separation at the PDF conversion boundary, before any model sees the article."""
+from tests.test_pdftext import typeset
 import tempfile
 import unittest
 from pathlib import Path
@@ -82,7 +83,7 @@ class ReferenceTest(unittest.TestCase):
                 patch.object(engine, "convert", side_effect=AssertionError("must not run MinerU")):
             root = Path(tmp)
             pdf = root / "paper.pdf"
-            pdf.write_bytes(b"%PDF-test")
+            pdf.write_bytes(typeset([(12, "A physical PDF page for the import fixture.")]))
             cached = [{"type": "text", "text": "Conclusions", "text_level": 1},
                       {"type": "text", "text": "The measured turbulent transport agrees with the predicted scaling law."},
                       {"type": "ref_text", "text": "A. Author, A cited publication (2020)."}]

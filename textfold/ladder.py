@@ -84,7 +84,7 @@ def prompt_for(doc, chunk):
     tables = tables_of(doc, chunk)
     context = ("\n\nTables in this section, for context (they are not units; a takeaway may use what they show):\n\n" + "\n\n".join(tables)) if tables else ""
     context += equations.prompt(doc, chunk)
-    return kinds.adapt(f"""Paper: {doc['meta']['title']}
+    return kinds.adapt(doc['meta'].get('scope_context', '') + f"""Paper: {doc['meta']['title']}
 
 Paper abstract, for context:
 {abstract}

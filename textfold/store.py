@@ -176,6 +176,9 @@ def parsed(pid):
         f = d / "correction.json"
         if f.exists():
             meta["correction"] = json.loads(f.read_text(encoding="utf-8"))
+            requested = d / "correction-request.json"
+            if requested.exists():
+                meta["correction"]["requested_scope"] = json.loads(requested.read_text(encoding="utf-8"))
         return parse((d / "source.html").read_text(), meta)
 
 

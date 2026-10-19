@@ -1,4 +1,5 @@
 """Complete figures at the shared conversion boundary, before reading levels."""
+from tests.test_pdftext import typeset
 import tempfile
 import unittest
 from pathlib import Path
@@ -108,7 +109,7 @@ class FigureGroupsTest(unittest.TestCase):
 
     def test_native_and_cache_store_the_same_unconfirmed_original_page(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); pdf=root/"paper.pdf";pdf.write_bytes(b"%PDF-test")
+            root=Path(tmp); pdf=root/"paper.pdf";pdf.write_bytes(typeset([(12, "A physical PDF page for the import fixture.")]))
             blocks=[{"type":"text","text":"Results","text_level":1},
                     {"type":"text","text":"The healthy narrative still imports before level generation."},
                     {"type":"image","bbox":[100,200,480,500],"img_path":"a.jpg","image_caption":["(a)"]},

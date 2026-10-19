@@ -697,6 +697,42 @@
       location.href = `/p/${PAPER.id}?lang=${encodeURIComponent(lang)}`;
     }
     const src = PAPER.source || {};
+    const scopeForm = document.getElementById('pdf-scope');
+    if (scopeForm) {
+      async function requestScope(kind) {
+        const message = document.getElementById('pdf-scope-message');
+        try {
+          let scope;
+          if (kind === 'range') {
+            const ranges = scopeForm.elements.ranges.value.split(',').map((part) => {
+              const m = part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+              if (!m) throw new Error('请填写物理页码，例如 1-5, 9-12');
+              return [+m[1], +(m[2] || m[1])];
+            });
+            scope = { kind, ranges };
+          } else if (kind === 'chapter') {
+            const chapter = scopeForm.elements.chapter.value, coverage = PAPER.correction || {};
+            const chapterPages = (coverage.chapters || {})[chapter] || [];
+            const here = [...document.querySelectorAll('.u[data-u]')].find((u) => {
+              const r = u.getBoundingClientRect(); return r.bottom > 80 && r.top < innerHeight * .65;
+            });
+            const pages = here && (coverage.content_pages || {})[here.dataset.u];
+            const readingPage = pages && pages.find((p) => chapterPages.includes(p));
+            scope = { kind, chapter, position: +scopeForm.elements.position.value || readingPage || undefined };
+          } else if (kind === 'document') scope = { kind };
+          else scope = PAPER.correction && (PAPER.correction.requested_scope || PAPER.correction.scope);
+          if (!scope) throw new Error('请先选择核查范围');
+          // Persisted scopes carry canonical pages; explicit requests use the public form.
+          if (scope.pages) scope = { kind: 'range', ranges: scope.pages.map((p) => [p, p]) };
+          const lang = (window.__reader && window.__reader.lang) || 'en';
+          const result = await api('/api/correction', { paper: PAPER.id, lang, scope });
+          message.textContent = '已请求核查；已完成结果会保留。';
+          watch(result.job, toastFor(lang));
+        } catch (e) { message.textContent = e.message; }
+      }
+      scopeForm.onsubmit = (e) => { e.preventDefault(); requestScope('range'); };
+      scopeForm.querySelectorAll('[data-scope]').forEach((b) => { b.onclick = () => requestScope(b.dataset.scope); });
+    }
     if (src.engine !== 'llm-for-zotero' && ((src.kind === 'pdf' && src.tier !== 'accurate') || (src.kind === 'file' && src.tier === 'fast'))) {
       const acc = h('button', 'cmpbtn accbtn');
       acc.type = 'button';

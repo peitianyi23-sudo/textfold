@@ -175,8 +175,16 @@ class Jobs:
     def _same(self, **kw):   # the same request already waiting or running is that job
         return next((j for j in self.items.values() if j["status"] in ("queued", "running") and all(j.get(k) == v for k, v in kw.items())), None)
 
-    def submit(self, ref, lang, force, attach=None):
+    def submit(self, ref, lang, force, attach=None, scope=None):
         pid = store.resolve(ref)
+        if scope is not None:
+            from . import correction
+            # Separate from worker coverage: an old reply must not replace a newer selection.
+            correction._write(store.pdir(pid), "correction-request.json", scope)
+            for job in list(self.items.values()):
+                if job["kind"] == "generate" and job["pid"] == pid and job["status"] in ("queued", "running"):
+                    self.stop(job["id"])
+            return self._new(self.q, pid=pid, lang=lang, force=bool(force), attach=attach, scope=scope)
         return self._same(kind="generate", pid=pid, lang=lang) or self._new(self.q, pid=pid, lang=lang, force=bool(force), attach=attach)
 
     def convert(self, pid, file, name, lang, tier=None, replace=False):
@@ -264,7 +272,7 @@ class Jobs:
                     job["model"] = spec["id"]
                 except RuntimeError:   # none: the paper is still fetched and parsed, to be read as written
                     spec = None
-                pipeline.generate(job["pid"], job["lang"], spec, force=job["force"], progress=self._progress(job, stop), log=self._log(job), stop=stop)
+                pipeline.generate(job["pid"], job["lang"], spec, force=job["force"], progress=self._progress(job, stop), log=self._log(job), stop=stop, scope=job.get("scope"))
                 job["status"] = "done"
             except Exception as e:  # shown in the app; the traceback stays in the job log
                 if str(e) == "no-html" and not stop.is_set():
@@ -453,7 +461,8 @@ def reader_page(pid):
     layers = store.pdir(pid) / "layers"
     sig = tuple(sorted((f.name, f.stat().st_mtime) for f in layers.glob("*.json"))) if layers.exists() else ()
     sig += ((build.WEB / "template.html").stat().st_mtime,)  # a changed page template re-renders too
-    sig += tuple((f.name, f.stat().st_mtime_ns) for f in (store.pdir(pid) / "source.html", store.pdir(pid) / "correction.json") if f.exists())
+    sig += tuple((f.name, f.stat().st_mtime_ns) for f in (store.pdir(pid) / "source.html", store.pdir(pid) / "correction.json",
+                                                      store.pdir(pid) / "correction-request.json") if f.exists())
     hit = PAGES.get(pid)
     if not hit or hit[0] != sig:
         hit = (sig, build.page(store.assemble(pid), app=True))
@@ -630,9 +639,19 @@ def make_handler(jobs):
                             (store.pdir(pid) / "source.pdf").is_file() and (store.pdir(pid) / "source.md").is_file()):
                         return self.json({"error": "no imported PDF reading copy"}, 400)
                     lang = body.get("lang") if body.get("lang") in langs.LANGS else "en"
-                    if not jobs._same(kind="generate", pid=pid):
-                        correction.queue(pid, reset=(correction.state(pid) or {}).get("status") == "done")
-                    return self.json({"paper": pid, "job": jobs.submit(pid, lang, False)})
+                    try:
+                        if body.get("scope") is not None:
+                            scope = correction.choose(pid, body["scope"])
+                        else:
+                            if not correction.state(pid):
+                                correction.queue(pid)
+                            current = correction.state(pid) or {}
+                            if current.get("status") == "awaiting-scope":
+                                return self.json({"paper":pid, "needs":"correction-scope", "correction":current})
+                            scope = None
+                        return self.json({"paper": pid, "job": jobs.submit(pid, lang, False, scope=scope)})
+                    except (ValueError, TypeError) as e:
+                        return self.json({"error": str(e)}, 400)
                 if u.path == "/api/zotero/read":   # Zotero PDFs consume an existing cache; other item types keep their existing paths
                     lib, _, key = str(body.get("item") or "").rpartition("/")
                     lang = body.get("lang") if body.get("lang") in langs.LANGS else "en"

@@ -31,3 +31,8 @@ Its continuation across columns remains part of the same caption.
 A region reported by a document extractor.
 An extracted image block can contain a complete figure or only part of one.
 _Avoid_: Figure, unless the block contains the complete figure
+
+**Correction scope**:
+The content selected for extraction correction: a whole document, a chapter, or a page range.
+Selection does not imply that checking has completed.
+_Avoid_: Checked content
