@@ -456,12 +456,12 @@ comparison/review stage, or the HTTP status and retry wait; `timing.requests[*].
 Display equations participate in the section's progressive compression. `chunks[*].lad.equations` stores source
 block ids, separate `key` and `takeaway` decisions (Takeaway is a subset), meaning and necessary conditions.
 Translations keep those decisions and translate the explanations. Equation explanations at Key and Takeaway
-follow figure-caption alignment, including the Takeaway spine inset. Clicking their text switches in place
-from the short model explanation to the adjacent author paragraphs in the same section, using the same `morph`
-animation and local-open presentation as other text. There is no separate disclosure, arrow, or Original control.
-These are original explanatory context, rather than an invented author caption. Clicking again, Escape, or changing
-the global level restores the short explanation. Source paragraphs are rendered only when opened, and sandbox
-keyframes keep them closed. Essential equation concepts also inform the section takeaway and Topic;
+use the ordinary caption text unit, built in the reader payload from the existing equation selection and nearby
+author prose. Its short wording is aligned to source tokens with the existing ladder builder; source equations,
+saved layers and paragraph units stay unchanged. `unitNode`, `pieces`, `drawUnit`, `renderUnit`, and `toggleUnit`
+are shared with figure captions, so fonts, local-open styling and surviving-word transitions are the same. Full/Brief
+already contain the original prose, and Topic hides formulas, so hidden duplicate captions are not rendered at those
+levels. Source-language and existing translated caption ladders use the corresponding source paragraphs. Essential equation concepts also inform the section takeaway and Topic;
 Topic remains a concept map without displaying formulas. The reader displays selected original equation
 HTML directly at Key/Takeaway, including long formulas and author numbers; author rows stay intact and wider
 formulas scroll within their own block. Topic stays unchanged. Existing layers acquire selection when regenerated;

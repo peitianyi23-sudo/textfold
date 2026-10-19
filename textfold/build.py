@@ -88,6 +88,8 @@ def inline_images(doc, app=False):
 
 
 def payload(doc, app, katex=None, saved=None, pdf=None):
+    from . import equations
+    doc = equations.reader_captions(doc)
     data = {k: doc[k] for k in ("meta", "atoms", "units", "chunks", "blocks", "bib", "edges", "alias")}
     data["app"] = app
     data["katex"] = katex   # where the reader finds KaTeX: a folder, "inside" the page, or nowhere (math stays as written)

@@ -6,6 +6,27 @@ from unittest.mock import patch
 
 
 class EssentialEquationTests(unittest.TestCase):
+    def test_reader_caption_uses_aligned_unit_ladder_without_changing_saved_document(self):
+        from copy import deepcopy
+        doc = self.doc(); chunk = doc['chunks'][0]
+        for u in doc['units'].values():
+            u['lad'] = ladder.local(u, doc['atoms'])
+        eq = equations.inventory(doc, chunk)[0]
+        chunk['lad'] = {'equations': [{'id': eq['id'], 'key': True, 'takeaway': True,
+                                     'meaning': 'A result subject to $x>0$.', 'conditions': ''}]}
+        original = deepcopy(doc)
+        rendered = equations.reader_captions(doc)
+        block = next(b for b in rendered['blocks'] if b.get('id') == eq['id'])
+        unit = rendered['units'][block['cap']]
+        self.assertEqual(unit['role'], 'caption')
+        self.assertIn(block['cap'], rendered['chunks'][0]['units'])
+        self.assertTrue(any('m' in token for token in unit['lad']['brief']))
+        source = next(iter(doc['units'].values()))['toks']
+        prefix = deepcopy(unit['toks'][:len(source)])
+        prefix[-1].pop('s', None)  # Joining source paragraphs adds one inter-paragraph space.
+        self.assertEqual(prefix, source)
+        self.assertEqual(doc, original)
+
     def doc(self):
         return parse(correction.render('# Result\n\nA result subject to $x>0$.\n\n$$x=y+z \\tag{7}$$\n\nAn intermediate step.\n\n$$y=z \\tag{8}$$', {}),
                      {'id': 'pdf-0123456789abcdef', 'title': 'Test'})

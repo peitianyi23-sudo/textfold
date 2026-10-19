@@ -61,3 +61,63 @@ def selected(doc, chunk, rows):
             out.append({"id": row["id"], "key": True, "takeaway": bool(row.get("takeaway")),
                         "meaning": explanation(row["meaning"]), "conditions": explanation(row.get("conditions", ""))})
     return out
+
+
+def reader_captions(doc):
+    """Build view-only equation captions with the ordinary aligned text ladder."""
+    from copy import deepcopy
+    from . import ladder
+    doc = deepcopy(doc)
+    chunks = {c['id']: c for c in doc['chunks']}
+    for i, block in enumerate(doc['blocks']):
+        if block['k'] != 'eq' or block.get('chunk') not in chunks:
+            continue
+        chunk = chunks[block['chunk']]
+        row = next((r for r in (chunk.get('lad') or {}).get('equations', []) if r['id'] == block['id']), None)
+        if not row:
+            continue
+        context = []
+        for direction in (-1, 1):
+            for j in range(i + direction, -1 if direction < 0 else len(doc['blocks']), direction):
+                near = doc['blocks'][j]
+                if near.get('chunk') != block.get('chunk') or near['k'] in ('h', 'fig'):
+                    break
+                if near['k'] == 'u':
+                    context.append(doc['units'][near['u']])
+                    break
+                if near['k'] != 'eq':
+                    break
+        if not context:
+            continue
+        uid = block['id'] + '.cap'
+        unit = {'id': uid, 'role': 'caption', 'of': block['id'], 'toks': [], 'sents': []}
+        for source in context:
+            offset = len(unit['toks'])
+            if offset:
+                unit['toks'][-1]['s'] = 1
+            unit['toks'] += deepcopy(source['toks'])
+            unit['sents'] += [[a + offset, b + offset] for a, b in source['sents']]
+        summary = ' '.join(filter(None, (row['meaning'], row.get('conditions', '')))).rstrip('.。')
+        unit['lad'] = ladder.assemble(unit, {'takeaway': summary, 'evidence': list(range(len(unit['sents']))),
+                                          'role': 'analysis'}, doc['atoms'], 'equation')
+        for lang, translated in chunk.get('tr', {}).items():
+            translated_row = next((r for r in (translated.get('lad') or {}).get('equations', [])
+                                   if r['id'] == block['id']), None)
+            sources = [source.get('tr', {}).get(lang) for source in context]
+            if not translated_row or not all(sources):
+                continue
+            z = {'toks': [], 'sents': []}
+            for source in sources:
+                offset = len(z['toks'])
+                if offset:
+                    z['toks'][-1]['s'] = 1
+                z['toks'] += deepcopy(source['toks'])
+                z['sents'] += [[a + offset, b + offset] for a, b in source['sents']]
+            text = ' '.join(filter(None, (translated_row['meaning'], translated_row.get('conditions', '')))).rstrip('.。')
+            z['lad'] = ladder.assemble(z, {'takeaway': text, 'evidence': list(range(len(z['sents']))),
+                                         'role': 'analysis'}, doc['atoms'], 'equation')
+            unit.setdefault('tr', {})[lang] = z
+        doc['units'][uid] = unit
+        chunk['units'].append(uid)
+        block['cap'] = uid
+    return doc

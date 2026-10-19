@@ -155,6 +155,12 @@
   function renderUnit(uid, hot = true) {
     const L = levelOf(uid), el = unitEl.get(uid);
     el.classList.toggle('local-open', localLevel.has(uid) && L > level);
+    // Full/Brief already show the author paragraphs, and Topic hides formulas.
+    // Do not lay out duplicate caption tokens at those global levels.
+    if (el.classList.contains('eq-caption') && (level >= 3 || level === 0)) {
+      el.dataset.l = L; el._stale = false; el._mode = 'txt'; el._tx.replaceChildren();
+      return;
+    }
     const fig = figOf.get(uid);
     if (fig) fig.dataset.l = L;
     el._mode = hot ? 'tok' : 'txt';
@@ -300,7 +306,7 @@
     const chunkById = Object.fromEntries(D.chunks.map((c) => [c.id, c]));
     let body = chunksEl, list = null, listId = null, front = null;
     const boxes = [];       // open theorem / definition / proof frames
-    for (const [blockIndex, b] of D.blocks.entries()) {
+    for (const b of D.blocks) {
       if (b.k === 'box') {
         const cat = b.kind === 'proof' ? 'proof' : /^def/.test(b.kind) ? 'def' : /rem|exa|note|obs/.test(b.kind) ? 'rem' : 'thm';
         const bx = h('div', `box box-${cat}`); bx.id = b.id;
@@ -355,26 +361,13 @@
         list = null;
         const e = h('div', b.k, b.k === 'eq' ? null : b.html); e.dataset.id = `${b.k}:${b.id || Math.random().toString(36).slice(2)}`;
         if (b.k === 'eq') {
-          e.append(h('div', 'eq-body', b.html));
+          const formula = h('div', 'eq-body', b.html); formula.dataset.id = `eq:${b.id}`; e.append(formula);
           e.dataset.eq = b.id; e.dataset.chunk = b.chunk || '';
-          // Equations have surrounding author prose, rather than an authored figure caption.
-          // Keep those source units separate from the model's short explanation.
-          const context = [];
-          for (const direction of [-1, 1]) {
-            for (let j = blockIndex + direction; j >= 0 && j < D.blocks.length; j += direction) {
-              const near = D.blocks[j];
-              if (near.chunk !== b.chunk || near.k === 'h' || near.k === 'fig') break;
-              if (near.k === 'u') { context.push(near.u); break; }
-              if (near.k !== 'eq') break;
-            }
+          if (b.cap) {
+            const caption = unitNode(b.cap, 'figcaption');
+            caption.classList.add('eq-caption');
+            e.append(caption);
           }
-          const caption = h('div', 'eq-caption');
-          e._caption = caption;
-          const summary = h('div', 'eq-meaning'); summary.dataset.id = `eq-meaning:${b.id}`;
-          summary.append(h('span', 'eq-short'));
-          caption.append(summary, h('div', 'eq-source'));
-          e._context = context;
-          e.append(caption);
         }
         e.dataset.l = level; lvBlocks.push(e);
         target.append(e);
@@ -392,35 +385,13 @@
     }
   }
 
-  function renderEquationSource(e) {
-    const source = e.querySelector('.eq-source');
-    source.replaceChildren();
-    const open = localLevel.has(`eq:${e.dataset.eq}`);
-    e._caption.classList.toggle('local-open', open);
-    if (!open) return;
-    for (const uid of e._context) {
-      const p = h('p', null, textHtml(uid, 4)); p.dataset.sourceU = uid;
-      source.append(p); texify(p);
-    }
-  }
-
   // everything that is text in the chrome or depends on the language but is not a unit
   function applyLang() {
     for (const e of docEl.querySelectorAll('.eq[data-eq]')) {
       const c = D.chunks.find(c => c.id === e.dataset.chunk);
       const base = c && c.lad && (c.lad.equations || []).find(r => r.id === e.dataset.eq);
-      const z = c && trOf(c);
-      const translated = z && z.lad && (z.lad.equations || []).find(r => r.id === e.dataset.eq);
-      const row = translated || base;
       e.dataset.key = base && base.key ? '1' : '0';
       e.dataset.takeaway = base && base.takeaway ? '1' : '0';
-      const meaning = e.querySelector('.eq-short');
-      meaning.innerHTML = row ? mathify([row.meaning, row.conditions].filter(Boolean).join(' '), e.querySelector('.eq-body').innerHTML) : '';
-      texify(meaning);
-      const caption = e.querySelector('.eq-caption');
-      caption.hidden = !row;
-      caption.classList.toggle('has-source', !!e._context.length);
-      renderEquationSource(e);
     }
     const t = T[ui], c = T[lang], m = D.meta;   // (c: the names of the paper's own parts, in the language it is read in)
     document.documentElement.lang = I18N.htmlLang(lang);
@@ -499,7 +470,6 @@
   const order = new Map();   // uid -> position in the paper
   const drawBlock = (x) => {
     x.dataset.l = level; x._stale = false;
-    if (x._caption) renderEquationSource(x);
   };
   const redraw = (x) => { if (typeof x === 'string') renderUnit(x, false); else drawBlock(x); };
   const elOf = (x) => (typeof x === 'string' ? unitEl.get(x) : x);
@@ -1023,7 +993,7 @@
         }
       }
     }
-    for (const el of root.querySelectorAll('.paper-head > [data-id], .hd, .stake > [data-id], .box-h, .fbody, .eq, .raw, .bib')) {
+    for (const el of root.querySelectorAll('.paper-head > [data-id], .hd, .stake > [data-id], .box-h, .fbody, .eq-body, .raw, .bib')) {
       const sec = el.closest('section.chunk');
       let grp = null, kind = 't';
       if (el.classList.contains('hd') || el.parentNode.classList.contains('stake')) grp = sec && `h:${sec.id}`;
@@ -1156,6 +1126,7 @@
     function copy(node) {
       const cl = node.classList;
       if (cl.contains('u')) {
+        if (cl.contains('eq-caption') && (L >= 3 || L === 0)) return null;
         const uid = node.dataset.u;
         if (!inBand(uid)) return null;
         const el = plain(node.cloneNode(false));
@@ -1169,11 +1140,9 @@
       if (lv.has(node) && !inBand(node)) return null;
       if (node.tagName === 'FIGURE') { const cap = node.querySelector(':scope > figcaption.u'); if (cap && !inBand(cap.dataset.u)) return null; }
       if (cl.contains('hd')) { const el = plain(node.cloneNode(true)); heads.set(el.dataset.id, el); return el; }
-      if (cl.contains('stake') || cl.contains('box-h') || cl.contains('fbody') || cl.contains('eq') || cl.contains('raw')) {
+      if (cl.contains('stake') || cl.contains('box-h') || cl.contains('fbody') || cl.contains('eq-body') || cl.contains('raw')) {
         const el = node.cloneNode(true);
         if (lv.has(node)) { el.dataset.l = L; el._pos = node._pos; }
-        const caption = cl.contains('eq') && el.querySelector('.eq-caption');
-        if (caption) { caption.classList.remove('local-open'); caption.querySelector('.eq-source').replaceChildren(); }
         return el;
       }
       if (cl.contains('side') || cl.contains('lside')) return node.cloneNode(true);
@@ -1508,16 +1477,6 @@
     morph(() => {
       if (localLevel.has(uid)) localLevel.delete(uid); else localLevel.set(uid, 4);
       renderUnit(uid, true);
-    }, { el, y: r.top, frac: 0 });
-  }
-
-  function toggleEquation(el) {
-    if (busy || !el._context.length) return;
-    const r = el.getBoundingClientRect(), key = `eq:${el.dataset.eq}`;
-    morph(() => {
-      if (localLevel.has(key)) localLevel.delete(key); else localLevel.set(key, 4);
-      renderEquationSource(el);
-      capEpoch++;
     }, { el, y: r.top, frac: 0 });
   }
 
@@ -3484,8 +3443,6 @@ math { font-size: 1.05em; }
     if (e.target.closest('a, details, summary')) return;
     if (level === 4 && !localLevel.size) return;
     if (String(getSelection()).length) return;
-    const equation = e.target.closest('.eq-caption.has-source');
-    if (equation) { toggleEquation(equation.closest('.eq')); return; }
     const el = e.target.closest('.u');
     if (!el || !el.dataset.u) return;
     if (level === 0 && !localLevel.size) {

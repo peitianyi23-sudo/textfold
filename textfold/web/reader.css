@@ -304,15 +304,13 @@ figure.fig[data-l="0"] .flabel { font-weight: 600; color: var(--muted); }
 .eq[data-l="2"]:not([data-key="1"]), .eq[data-l="1"]:not([data-takeaway="1"]), .eq[data-l="0"], .raw[data-l="2"], .raw[data-l="1"], .raw[data-l="0"],
 .front[data-l="2"], .front[data-l="1"], .front[data-l="0"],
 .doc:not([data-level="4"]) .bib { display: none; }
-.eq-caption { display: none; margin-top: 10px; font: 14.5px/1.5 var(--sans); color: var(--ink-2); white-space: normal; }
-.eq[data-l="2"] .eq-caption:not([hidden]), .eq[data-l="1"] .eq-caption:not([hidden]) { display: block; }
-/* Match figure captions, including the space beside the Takeaway spine. */
-.doc[data-level="1"] .eq-caption { padding-left: 22px; }
-.eq-caption.has-source { cursor: pointer; }
-.eq-caption.local-open { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-left: -15px; margin-right: -15px; box-shadow: 0 8px 28px -18px rgba(40, 30, 10, .35); }
-.eq-caption.local-open .eq-short { display: none; }
-.eq-source { font-family: var(--serif); }
-.eq-source p { margin: 8px 0 0; }
+/* Equation captions share the figure caption text ladder and local-open styling. */
+.eq-caption.u { font-family: var(--sans); }
+.eq-caption.u[data-l="4"], .eq-caption.u[data-l="3"] { font-size: 14.5px; line-height: 1.5; margin: 10px 0 0; }
+.eq[data-l="4"] .eq-caption, .eq[data-l="3"] .eq-caption { display: none; }
+.doc[data-level="1"] .eq-caption.u { padding-left: 22px; }
+.eq-caption.u .dot { display: none; }
+.eq-caption.u[data-l="2"] { padding-left: 0; }
 .eq table { max-width: none; } /* preserve author rows and numbering; overflow stays formula-local */
 .bib { margin-top: 48px; font-family: var(--serif); font-size: 14.5px; color: var(--ink-2); }
 .bib summary { font-family: var(--sans); font-size: 20px; font-weight: 700; color: var(--ink); cursor: pointer; margin-bottom: 10px; }
