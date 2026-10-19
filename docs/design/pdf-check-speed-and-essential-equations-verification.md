@@ -88,5 +88,19 @@ At 390 CSS pixels Galtier's formula viewport is 356 pixels wide with 1032 pixels
 both scroll locally, both keep the meaning at x=17, and document width remains 390. Original rows and labels survive,
 with no literal alignment ampersands. The isolated note fixture is not copied into the daily library.
 
-Daily service application receipts are retained with the raw evidence; deployment follows the idle queue and
-existing scheduled-task ownership checks after the tested commit is merged into `personal`.
+Signed-off implementation commit `9ea351b8531a4efbcf1720236b91f76dfc3659f9` was fast-forward merged into `personal`.
+Both the model queue and PDF engine queue were empty before refreshing the existing **TextFold Personal** scheduled
+task. The owner remained the primary checkout, its original launcher, and
+`C:/Users/admin/AppData/Local/TextFold/personal`; PID 46692 became 85420. Served reader JS/CSS bytes match the merged
+source. The bridge on 10531 was reused and not restarted.
+
+Only the two approved reading copies received the tested corrected source and current English/Chinese layers.
+Their original PDF bytes match the trial originals; every English unit matches the current parse, translations
+use the current English version, and deployed source HTML matches the tested copy. Latest daily notes were
+reconciled rather than copied from the trial (both selected papers had zero daily notes); the isolated anchor
+fixture was excluded. Pre-delivery copies are retained under `daily-before/` in the evidence directory.
+
+An actual browser against **3017** confirmed Key/Takeaway selection counts 8/4 and 8/2, with no JavaScript errors.
+No jobs were queued/running after delivery. `daily-service.json`, `daily-data.json`, `daily-check.json` and the daily
+screenshots retain these receipts. Unrelated dirty `GLOSSARY.md` content was compared before/after merge and is
+unchanged; the other uncommitted design drafts remain outside the commit. No push or upstream PR was made.
