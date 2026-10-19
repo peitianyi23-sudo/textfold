@@ -21,7 +21,7 @@ _WORKED = {}   # (base, model, level) -> index of the request shape that was acc
 WAITS = (5, 15, 30, 45)   # seconds before asking again when rate-limited (free models: 20 requests a minute)
 
 
-def vision(prompt, schema, spec, images, timeout=900):
+def vision(prompt, schema, spec, images, timeout=900, stop=None, on_retry=None):
     """PDF proofreading through the reader's selected OpenAI-compatible provider.
 
     The ChatGPT bridge's chat adapter loses image content; its native Responses route accepts it.
@@ -43,7 +43,8 @@ def vision(prompt, schema, spec, images, timeout=900):
                            [{"type": "input_image", "image_url": u, "detail": "high"} for u in urls]}]}
         if spec.get("effort"):
             body["reasoning"] = {"effort": spec["effort"]}
-        result = _post(base + "/responses", body, headers, timeout)
+        url = base + "/responses"
+        result = _vision_post(url, body, headers, timeout, stop, on_retry)
         if result.get("status") != "completed":
             raise RuntimeError("PDF image check did not complete: " + str(result.get("error") or result.get("status")))
         reply = "".join(c.get("text", "") for o in result.get("output", []) for c in o.get("content", [])
@@ -52,10 +53,33 @@ def vision(prompt, schema, spec, images, timeout=900):
         body = {"model": spec["model"], "messages": [{"role": "system", "content": system},
                 {"role": "user", "content": [{"type": "text", "text": text}] +
                  [{"type": "image_url", "image_url": {"url": u, "detail": "high"}} for u in urls]}]}
-        result = _post(base + "/chat/completions", body, headers, timeout)
+        result = _vision_post(base + "/chat/completions", body, headers, timeout, stop, on_retry)
         reply = (result.get("choices") or [{}])[0].get("message", {}).get("content") or ""
     from .agents import parse_json
     return parse_json(reply, schema)
+
+
+def _vision_post(url, body, headers, timeout, stop, on_retry):
+    """Retry an overloaded image endpoint with the same images and original task."""
+    for attempt in range(len(WAITS) + 1):
+        if stop is not None and stop.is_set():
+            from .llm import Stopped
+            raise Stopped()
+        try:
+            return _post(url, body, headers, timeout)
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 502, 503, 504, 529) or attempt == len(WAITS):
+                raise
+            after = e.headers.get("Retry-After") if e.headers else None
+            delay = min(60, float(after)) if after and after.replace(".", "", 1).isdigit() else WAITS[attempt]
+            if on_retry:
+                on_retry(e.code, attempt + 1, delay)
+            if stop is not None:
+                if stop.wait(delay):
+                    from .llm import Stopped
+                    raise Stopped()
+            else:
+                time.sleep(delay)
 
 
 def _post(url, body, headers, timeout):

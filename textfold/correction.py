@@ -34,7 +34,7 @@ REVIEW = {"type": "object", "properties": {"decisions": {"type": "array", "items
     "reason": {"type": "string"}}, "required": ["index", "verdict", "reason"]}}}, "required": ["decisions"]}
 
 
-def review(edits, images, spec, pages):
+def review(edits, images, spec, pages, stop=None, on_retry=None):
     """A separate call sees both versions, so it can reject a plausible but unfaithful correction."""
     if not edits:
         return [], []
@@ -47,7 +47,8 @@ def review(edits, images, spec, pages):
               "Use UNRESOLVED when the image cannot establish the change. Explain the visible evidence, not a physics "
               "argument. Text outside these images is unresolved. Return one decision per index.\n\n" +
               json.dumps([{**e, "index": i} for i, e in enumerate(edits)], ensure_ascii=False))
-    result = llm_openai.vision(prompt, REVIEW, spec, images)
+    options = {k:v for k,v in {"stop":stop,"on_retry":on_retry}.items() if v is not None}
+    result = llm_openai.vision(prompt, REVIEW, spec, images, **options)
     decisions = result["decisions"]
     if sorted(x["index"] for x in decisions) != list(range(len(edits))):
         raise RuntimeError("PDF edit verification did not return a decision for every proposed change")
@@ -346,6 +347,18 @@ def page_ranges(text, page_texts):
         if not hits:
             out.append((0, len(text)))
             continue
+        # Running headers/citations can match four words in the bibliography tens
+        # of pages away. Localize with the main contiguous body of page anchors,
+        # rather than letting one remote phrase stretch the payload to the whole PDF.
+        groups = [[]]
+        gap = max(1400, len(page) * 2)
+        for hit in hits:
+            if groups[-1]:
+                prev = groups[-1][-1]
+                if tokens[hit.a].start() - tokens[prev.a + prev.size - 1].end() > gap:
+                    groups.append([])
+            groups[-1].append(hit)
+        hits = max(groups, key=lambda group: sum(hit.size for hit in group))
         first = tokens[min(b.a for b in hits)].start()
         last = tokens[max(b.a + b.size - 1 for b in hits)].end()
         start = text.rfind("\n\n", 0, max(0, first - 700))
@@ -386,16 +399,22 @@ def run(pid, spec, progress=lambda *a: None, stop=None, scope=None):
             raise llm.Stopped()
     def request(prompt, schema, images, page, stage):
         check()
+        progress(f"PDF 第 {page+1} 页 · {stage}", len(draft["checked"]), total)
         now = time.perf_counter()
         rec = {"page": page + 1, "stage": stage, "prompt_chars": len(prompt), "images": len(images)}
         try:
-            return llm_openai.vision(prompt, schema, spec, images)
+            return llm_openai.vision(prompt, schema, spec, images, stop=stop, on_retry=retry_notice(page,rec))
         except Exception as e:
             rec["error"] = str(e)
             raise
         finally:
             rec["seconds"] = time.perf_counter() - now
             metrics["requests"].append(rec)
+    def retry_notice(page, rec):
+        def retry(code, attempt, delay):
+            rec.setdefault("retries", []).append({"http":code,"attempt":attempt,"wait_seconds":delay})
+            progress(f"PDF 第 {page+1} 页 · HTTP {code}，{delay:g} 秒后重试",len(draft["checked"]),total)
+        return retry
     def picture(page):
         now = time.perf_counter()
         with PDFIUM:
@@ -441,7 +460,7 @@ def run(pid, spec, progress=lambda *a: None, stop=None, scope=None):
             saved = proposals / f"{page+1}.json"
             if saved.exists():
                 cached = json.loads(saved.read_text(encoding="utf-8"))
-                if cached["local"] == local:
+                if local in cached["local"] and all(e["before"] in local for e in cached["result"]["edits"]):
                     metrics.setdefault("reused_comparisons", []).append(page+1)
                     return cached["result"], image, local
             prompt = (f"Check physical PDF page {page + 1} of {total} IN FULL: every paragraph, formula, caption, "
@@ -515,11 +534,13 @@ def run(pid, spec, progress=lambda *a: None, stop=None, scope=None):
                 draft["issues"].extend({"page": page + 1, "text": x} for x in result["issues"])
                 crops = review_crops(candidates, image)
                 if candidates:
+                    progress(f"PDF 第 {page+1} 页 · 独立复核", len(draft["checked"]), total)
                     now = time.perf_counter()
                     rec = {"page":page+1,"stage":"independent-region-review","images":len(crops)}
                     try:
                         accepted, review_issues = review(candidates, crops, spec,
-                            f"{page+1}, merged context crops covering ALL indexed edits; check the corrected result against the printed region")
+                            f"{page+1}, merged context crops covering ALL indexed edits; check the corrected result against the printed region",
+                            stop=stop, on_retry=retry_notice(page,rec))
                     except Exception as e:
                         rec["error"] = str(e)
                         raise

@@ -83,7 +83,7 @@ class ScopeTests(unittest.TestCase):
         correction.queue(PID)
         stop = threading.Event()
         edit = {"before":"Broken turbuð Þlent flow.","after":"A turbulent flow.","reason":"PDF"}
-        def response(prompt,schema,*a):
+        def response(prompt,schema,*a, **kwargs):
             if schema is correction.REVIEW:
                 return {"decisions":[{"index":0,"verdict":"accept","reason":"Printed text"}]}
             if "physical PDF page 1 " in prompt:
@@ -174,7 +174,7 @@ class ScopeTests(unittest.TestCase):
         correction.queue(PID)
         selected = correction.choose(PID,{"kind":"range","ranges":[[1,1]]})
         stop = threading.Event()
-        def reply(*a):
+        def reply(*a, **kwargs):
             stop.set()
             return {"edits":[],"issues":[]}
         with patch.object(llm_openai,"vision",side_effect=reply):
@@ -191,7 +191,7 @@ class ScopeTests(unittest.TestCase):
     def test_rejected_restoration_does_not_silently_lose_the_missing_display_number(self):
         correction.queue(PID)
         proposal = {"before":"Broken turbuð Þlent flow.","after":r"$$T=x \tag{4}$$","reason":"Missing label"}
-        def reply(prompt,schema,*a):
+        def reply(prompt,schema,*a, **kwargs):
             if schema is correction.REVIEW:
                 if r"\\mathcal" in prompt:
                     return {"decisions":[{"index":0,"verdict":"accept","reason":"Printed calligraphic T and number"}]}
@@ -227,7 +227,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_unrestorable_number_remains_an_explicit_issue_when_no_edit_is_returned(self):
         correction.queue(PID)
-        def reply(prompt,*a):
+        def reply(prompt,*a, **kwargs):
             if "physical PDF page 1" in prompt:
                 return {"edits":[],"issues":[],"displays":[{"number":"4","present":False,"box":[0,0,1,1]}]}
             return {"edits":[],"issues":[]}
@@ -239,7 +239,7 @@ class ScopeTests(unittest.TestCase):
         correction.queue(PID)
         next_page = threading.Event()
         reviewed = threading.Event()
-        def reply(prompt,schema,*a):
+        def reply(prompt,schema,*a, **kwargs):
             if schema is correction.REVIEW:
                 self.assertFalse(next_page.wait(.03),"Next page started during independent review")
                 reviewed.set()

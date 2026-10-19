@@ -78,7 +78,7 @@ class CorrectionTests(unittest.TestCase):
 
     def test_all_pages_checked_and_edited_page_verified_before_publication(self):
         correction.queue(PID)
-        def reply(prompt, schema, spec, images):
+        def reply(prompt, schema, spec, images, **kwargs):
             if schema is correction.REVIEW:
                 return {"decisions": [{"index": 0, "verdict": "accept", "reason": "PDF shows turbulent"}]}
             if "physical PDF page 1" in prompt:
@@ -109,7 +109,7 @@ class CorrectionTests(unittest.TestCase):
     def test_parallel_overlap_is_relocated_in_current_context_without_overwriting_reviewed_edit(self):
         correction.queue(PID)
         edit = {"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "PDF"}
-        def reply(prompt, schema, spec, images):
+        def reply(prompt, schema, spec, images, **kwargs):
             if schema is correction.REVIEW:
                 return {"decisions": [{"index": 0, "verdict": "accept", "reason": "Printed turbulent"}]}
             if "Region verification pass" in prompt:
@@ -125,7 +125,7 @@ class CorrectionTests(unittest.TestCase):
 
     def test_missing_numbered_display_gets_region_restoration_and_independent_review(self):
         correction.queue(PID)
-        def reply(prompt, schema, spec, images):
+        def reply(prompt, schema, spec, images, **kwargs):
             if schema is correction.REVIEW:
                 return {"decisions": [{"index": 0, "verdict": "accept", "reason": "All terms and number match"}]}
             if "Restore the following numbered" in prompt:
@@ -143,7 +143,7 @@ class CorrectionTests(unittest.TestCase):
 
     def test_resume_skips_completed_pages_and_publishes_only_after_all_pages(self):
         correction.queue(PID)
-        def reply(prompt, *args):
+        def reply(prompt, *args, **kwargs):
             if "physical PDF page 1" in prompt:
                 return {"edits": [], "issues": []}
             raise RuntimeError("offline")
