@@ -2329,6 +2329,7 @@
     const m = /[#&]n=([\w-]+)/.exec(location.hash), n = m && notes.find((x) => x.id === m[1]);
     const u = n ? n.anchor.unit : (/[#&]u=([^&]+)/.exec(location.hash) || [])[1];
     const el = n && !n.anchor.unit ? targetEl(n.anchor) : u && unitEl.get(decodeURIComponent(u));
+    if (!el && n) document.dispatchEvent(new CustomEvent('textfold-note-navigate', { detail: n, cancelable: true }));
     if (!el) return;
     if (el._stale) renderUnit(el.dataset.u, true);
     el.scrollIntoView({ block: 'center' });
@@ -2432,6 +2433,7 @@
   // a note from the list: the page flies to its passage (from the map, it first steps in to Key), opens the paragraph
   // to its full text in place where the zoom hides the passage, and opens the note there; Back returns
   function flyToNote(n) {
+    if (!document.dispatchEvent(new CustomEvent('textfold-note-navigate', { detail: n, cancelable: true }))) return;
     const a = n.anchor, from = { y: scrollY, level, from: null };
     if (whole(a)) { openChat(n); return; }
     if (busy || !targetEl(a)) return;
@@ -3312,6 +3314,7 @@ math { font-size: 1.05em; }
     const t = T[ui];
     langMenu.replaceChildren();
     for (const code of I18N.CODES) {
+      if (D.meta.reading_mode === 'original' && code !== 'en') continue;
       const have = AVAIL.includes(code);
       if (!have && !D.app) continue;
       const b = h('button', `lm-item${code === lang ? ' on' : ''}${have ? '' : ' gen'}`);

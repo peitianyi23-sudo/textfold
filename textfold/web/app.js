@@ -110,7 +110,7 @@
     const item = (p) => {
       const j = jobFor(p.id);
       const title = (p.titles && p.titles[uiLang]) || p.title;
-      const langs = p.langs.map((l) => `<span${l === uiLang ? ' class="on"' : ''}>${SHORT[l] || l}</span>`).join('');
+      const langs = p.langs.map((l) => `<span${l === uiLang ? ' class="on"' : ''}>${p.reading_mode === 'original' && l === 'en' ? (uiLang.startsWith('zh') ? '原文' : 'Original') : SHORT[l] || l}</span>`).join('');
       const active = PAPER && PAPER.id === p.id;
       const unfinished = !j && !p.langs.length && !p.readable;
       return `<div class="sb-row" data-pid="${p.id}" data-q="${esc(hay(p))}"><a class="sb-item${active ? ' active' : ''}${unfinished ? ' unfinished' : ''}" href="${unfinished ? '#' : `/p/${p.id}?lang=${pick(p)}`}"${unfinished ? ` data-resume="${p.id}"` : ''} title="${esc(p.title)}">
@@ -711,7 +711,9 @@
       }
       try { if (u) sessionStorage.setItem('pf-keep', JSON.stringify({ pid: PAPER.id, uid: u.dataset.u, top: u.getBoundingClientRect().top, level: R && R.level })); } catch { /* private window */ }
       if (R && lang !== R.lang && I18N.NATIVE[lang]) store.set(UI_KEY, lang);   // a language just made: the interface goes with it
-      location.href = `/p/${PAPER.id}?lang=${encodeURIComponent(lang)}`;
+      const q = new URLSearchParams({ lang });
+      if (PAPER.active_chapter) q.set('chapter', PAPER.active_chapter);
+      location.href = `/p/${PAPER.id}?${q}`;
     }
     const src = PAPER.source || {};
     const scopeForm = document.getElementById('pdf-scope');

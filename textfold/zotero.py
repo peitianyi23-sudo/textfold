@@ -242,7 +242,7 @@ def read(lib, key, attachment="", select=False):
         if saved.get("attachment") == att["key"] and saved.get("paper"):
             pid = saved["paper"]
             if store.valid_id(pid) and (store.pdir(pid) / "source.html").exists():
-                return {**reply, "paper": pid}
+                return {**reply, "paper": pid, "reused": True}
         cached = zotero_cache.find(lib, key, att["key"], file, settings()["data_dir"])
         if not cached:
             return {**reply, "needs": "zotero-cache"}
