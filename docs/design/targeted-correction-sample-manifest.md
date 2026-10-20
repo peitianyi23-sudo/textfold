@@ -1,5 +1,7 @@
 # Targeted correction exploratory sample
 
+Subsequent implementation/evaluation: [verification](targeted-correction-verification.md). The selection record below predates that work.
+
 Selected read-only from the existing Zotero library on 2026-10-20 by two agents. All ten exact local PDF
 attachments exist, physical page counts were measured with pdfinfo, and each has an existing MinerU full.md.
 No conversion, correction, library/cache writes, downloads, or full visual PDF comparison ran.

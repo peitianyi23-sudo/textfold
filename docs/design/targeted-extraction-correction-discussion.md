@@ -1,8 +1,9 @@
 # Targeted extraction correction discussion
 
-Status: design agreed, 2026-10-20. The user accepted the last frontier with "可以 尽可能提速这样".
-The product frontier is empty. This session records decisions and prepares a handoff; implementation and rollout
-have not started. Sample selection and the five/five discovery/evaluation plan are approved.
+Status: implemented and locally evaluated, 2026-10-20; see [verification](targeted-correction-verification.md).
+The following approved design remains the decision record. Design agreed on 2026-10-20. The user accepted the last frontier with "可以 尽可能提速这样".
+The product frontier is empty. At sign-off, the discussion session recorded decisions and prepared a handoff; implementation and rollout
+had not started. Sample selection and the five/five discovery/evaluation plan are approved.
 
 ## User direction
 

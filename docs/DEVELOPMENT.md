@@ -392,6 +392,8 @@ formula labels and paragraph edges inside each crop. Ambiguous anchors and unrea
 unresolved, with no automatic full-page escalation. A textless PDF explicitly retains this limitation. No new OCR,
 embedding service or producer-cache rewrite is involved. `targeted-work.json` retains screening, reviewed draft and
 completed candidate groups across interruption; existing prompt caching reuses successful screening requests.
+Text-only observations are qualified separately from PDF-backed unresolved positions. Partial review cannot publish
+a new Markdown footnote marker without its definition; the dependent edit remains unresolved.
 Targeted completion leaves physical `checked` coverage empty and records its method separately; derived layers
 start after that workflow ends and receive its unresolved issues.
 
