@@ -318,3 +318,89 @@ class TargetedTests(unittest.TestCase):
         self.assertIn(first["after"], source)
         self.assertIn(second["after"], source)
         self.assertEqual(correction.state(PID)["done"], 2)
+
+
+    def test_direct_relocation_cannot_publish_only_the_caption_deletion_half(self):
+        text = self.md + "\nFigs. 2(a) and\n\nFIG. 1. Original caption with $x+y$.\n\n2(b), give the result.\n"
+        (self.d/"source.md").write_text(text, encoding="utf-8")
+        (self.d/"source.html").write_text(correction.render(text, {}), encoding="utf-8")
+        correction.queue(PID)
+        edit = {"before": "Figs. 2(a) and\n\nFIG. 1. Original caption with $x+y$.\n\n2(b),", "after": "Figs. 2(a) and 2(b),",
+                "reason": "Caption will be moved by a companion edit", "evidence": "document-text"}
+        with patch.object(llm, "call", return_value=({"out": {"edits": [edit], "candidates": [], "issues": []}}, False)), \
+             patch.object(llm_openai, "vision") as vision:
+            correction.run(PID, SPEC)
+        vision.assert_not_called()
+        self.assertIn("FIG. 1. Original caption", (self.d/"source.md").read_text(encoding="utf-8"))
+        self.assertTrue(any("caption" in x["text"] for x in correction.state(PID)["issues"]))
+
+    def test_pdf_proposal_can_depend_on_an_earlier_draft_edit(self):
+        correction.queue(PID)
+        first = {"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "printed word"}
+        second = {"before": "A turbulent flow.", "after": "A turbulent flow $x=y\\tag{1}$.", "reason": "printed label after first repair"}
+        with patch.object(llm, "call", return_value=self.screen()), \
+             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"source"], anchors)), \
+             patch.object(llm_openai, "vision", side_effect=[{"edits": [first, second], "issues": []},
+                 {"decisions": [{"index": i, "verdict": "accept", "reason": "visible"} for i in [1, 0]]}]):
+            correction.run(PID, SPEC)
+        self.assertIn(second["after"], (self.d/"source.md").read_text(encoding="utf-8"))
+        self.assertEqual(correction.state(PID)["edits"], 2)
+
+    def test_rejected_prerequisite_withholds_dependent_accepted_edit(self):
+        correction.queue(PID)
+        edits = [{"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "first"},
+                 {"before": "A turbulent flow.", "after": "New formula $x=y$.", "reason": "dependent"}]
+        with patch.object(llm, "call", return_value=self.screen()), \
+             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"source"], anchors)), \
+             patch.object(llm_openai, "vision", side_effect=[{"edits": edits, "issues": []},
+                 {"decisions": [{"index": 0, "verdict": "reject", "reason": "printed differs"},
+                                {"index": 1, "verdict": "accept", "reason": "label matches"}]}]):
+            correction.run(PID, SPEC)
+        self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), self.md)
+        self.assertTrue(any("prerequisite" in x["text"] for x in correction.state(PID)["issues"]))
+
+    def test_matching_block_corrects_a_guessed_physical_page(self):
+        import json
+        (self.d/"layout.json").write_text(json.dumps([
+            {"p": 2, "b": [.1, .2, .8, .4], "t": "Broken turbuð Þlent flow."}]), encoding="utf-8")
+        correction.queue(PID)
+        response = self.screen()
+        response[0]["out"]["candidates"][0].update(block=0, page=1, anchor="")
+        with patch.object(llm, "call", return_value=response), patch.object(targeted, "crops") as fallback, \
+             patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}) as vision:
+            correction.run(PID, SPEC)
+        fallback.assert_not_called()
+        self.assertIn('"page": 2', vision.call_args.args[0])
+
+    def test_caption_text_layer_refines_an_image_inherited_box(self):
+        from reportlab.pdfgen import canvas
+        import pypdfium2 as pdfium
+        from PIL import Image
+        path = self.d/"caption.pdf"
+        cv = canvas.Canvas(str(path), pagesize=(600, 800))
+        text = "FIG. 1. This complete caption extends beyond both sides of the inherited image box."
+        cv.drawString(60, 330, text);cv.save()
+        block = {"p": 1, "b": [.3, .2, .7, .5], "fig": [.3, .2, .7, .5], "t": text}
+        with pdfium.PdfDocument(str(path)) as pdf:
+            image = targeted.block_crop(pdf, block, [block])
+        with Image.open(io.BytesIO(image)) as image:
+            self.assertLess(image.getextrema()[0][0], 64)
+            self.assertLess(image.height, 300)
+            self.assertGreater(image.width, 1000)
+
+
+    def test_numeric_index_to_letter_needs_pdf_and_keeps_printed_author_variant(self):
+        import json
+        text = self.md + "\nDefined $Ro$. Printed $R_0$ flows.\n"
+        (self.d/"source.md").write_text(text, encoding="utf-8")
+        (self.d/"source.html").write_text(correction.render(text, {}), encoding="utf-8")
+        (self.d/"layout.json").write_text(json.dumps([
+            {"p": 1, "b": [.1, .2, .8, .4], "t": "Printed $R_0$ flows."}]), encoding="utf-8")
+        correction.queue(PID)
+        edit = {"before": "$R_0$", "after": "$Ro$", "evidence": "document-symbol", "reason": "initial definition differs"}
+        with patch.object(llm, "call", return_value=({"out": {"edits": [edit], "candidates": [], "issues": []}}, False)), \
+             patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}) as vision:
+            correction.run(PID, SPEC)
+        self.assertEqual(vision.call_count, 1)
+        self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), text)
+        self.assertEqual(correction.state(PID)["issues"], [])

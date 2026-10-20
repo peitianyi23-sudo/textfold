@@ -110,6 +110,11 @@ def number_values(text):
     # MinerU spaces individual digits; compare values rather than their spacing.
     return Counter(re.findall(r"[-+]?\d+(?:\.\d+)?", re.sub(r"\s+", "", text)))
 
+
+def caption_labels(text):
+    """Standalone extractor caption labels, retained across a direct relocation."""
+    return set(re.findall(r"(?m)^(?:FIG(?:URE)?\.?|TABLE)\s+(\d+[A-Za-z]?|[IVX]+)[.:]", text))
+
 def text_spans(text, capacity=90000):
     """Ordinary papers fit one pass; split larger text at paragraph boundaries."""
     spans, start = [], 0
@@ -128,12 +133,29 @@ def apply_edits(work, edits, d, page):
     """Publishable draft edits share the existing image and footnote invariants."""
     if not edits:
         return []
-    text = c.patches(work["text"], edits)
+    text, valid, blocked = work["text"], [], []
+    for edit in edits:
+        try:
+            text = c.patches(text, [edit])
+            valid.append(edit)
+        except ValueError:
+            blocked.append(edit)
+            work["issues"].append({"page": page, "text": "Accepted proposal depends on an unaccepted or stale prerequisite: " + edit["reason"]})
+    edits = valid
     dangling = missing_footnotes(text) - missing_footnotes(work["text"])
-    blocked = []
     if dangling:
-        blocked = [e for e in edits if missing_footnotes(c.patches(work["text"], [e])) & dangling]
-        text = c.patches(work["text"], [e for e in edits if e not in blocked])
+        for edit in edits:
+            # Only a newly introduced marker can create this dependency.
+            if missing_footnotes(edit["after"]) & dangling:
+                blocked.append(edit)
+        text = work["text"]
+        for edit in edits:
+            if edit in blocked:
+                continue
+            try:
+                text = c.patches(text, [edit])
+            except ValueError:
+                blocked.append(edit)
         work["issues"].append({"page": page, "text": "Unresolved footnote dependency: " + ", ".join(sorted(dangling))})
     c.render(text, c._images((d/"source.md").read_text(encoding="utf-8"),
                             (d/"source.html").read_text(encoding="utf-8")))
@@ -163,6 +185,33 @@ def block_crop(pdf, block, layout=()):
                 if bounds == (left, right):
                     break
                 left, right = bounds
+            tp = p.get_textpage()
+            try:
+                words = list(re.finditer(r"\w+", tp.get_text_range()))
+                source = [m[0].casefold() for m in words]
+                grams = {}
+                for i in range(len(words)-3):
+                    grams.setdefault(tuple(source[i:i+4]), []).append(i)
+                target = re.findall(r"\w+", block["t"].casefold())
+                hits = [grams[tuple(target[i:i+4])][0] for i in range(len(target)-3)
+                        if len(grams.get(tuple(target[i:i+4]), [])) == 1]
+                if hits:
+                    start = words[min(hits)].start()
+                    end = words[max(hits)+3].end()
+                    count = tp.count_rects(start, end-start)
+                    rects = [tp.get_rect(i) for i in range(count)]
+                    if rects:
+                        left = min(left, max(0, min(r[0] for r in rects)-18))
+                        right = max(right, min(w, max(r[2] for r in rects)+18))
+                        low, high = min(r[1] for r in rects), max(r[3] for r in rects)
+                        if block.get("fig"):
+                            # MinerU image captions inherit the image's bbox; the
+                            # page's own caption text locates the missing lower extent.
+                            bottom, top = max(0, low-30), min(h, high+30)
+                        else:
+                            bottom, top = min(bottom, max(0, low-16)), max(top, min(h, high+16))
+            finally:
+                tp.close()
             bitmap = p.render(scale=2.4, crop=(left, bottom, w-right, h-top))
             try:
                 buf = io.BytesIO()
@@ -303,7 +352,16 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                     "A stray '# A' may be a real appendix; citation targets cannot be guessed by topic. "
                     "Do not rewrite science, grammar or author notation by physical plausibility or consistency alone. "
                     "Preserve possible printed v/u and beta/alpha inconsistencies unless document evidence actually "
-                    "proves extraction damage. Numerical VALUE changes and restoring missing formulas require PDF "
+                    "proves extraction damage. A definition alone does not prove a later variant is mis-extracted: "
+                    "printed R_0 can differ from a preceding Ro definition, just as v/u or beta/alpha can differ. "
+                    "An unmatched mathematical bar or missing quotation mark may itself be printed; syntactic balance "
+                    "or bibliography style alone is not positive extraction evidence. Use PDF candidates for those "
+                    "ambiguities. Continue making direct symbol repairs when actual document evidence establishes "
+                    "the extraction fault and intended symbol, rather than mere notation preference. "
+                    "Preserve every figure/table caption and all substantive content. For a relocation, return ONE "
+                    "edit spanning both source and destination and retaining the complete moved content; do not "
+                    "delete a caption assuming an absent or separately blocked companion edit will retain it. "
+                    "Numerical VALUE changes and restoring missing formulas require PDF "
                     "images: return candidates, NEVER direct edits for those. Ambiguous symbols also need candidates. "
                     "Screen for corrupted fractions/exponents, math/prose boundaries, control residue, split/duplicate "
                     "prose, missing passages and display labels, including syntactically plausible extraction faults. "
@@ -322,13 +380,28 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                     try:
                         if edit["before"] not in segment:
                             raise ValueError("Direct repair outside supplied text")
-                        if number_values(edit["after"]) - number_values(edit["before"]):
+                        before_numbers, after_numbers = number_values(edit["before"]), number_values(edit["after"])
+                        if after_numbers - before_numbers or (edit.get("evidence") == "document-symbol" and
+                                                             before_numbers - after_numbers):
                             raise ValueError("Numerical change requires PDF evidence")
                         draft = c.patches(draft, [edit])
                         direct.append(dict(edit, verification="Document context; not visually compared with PDF"))
                     except ValueError as e:
                         work.setdefault("withheld_direct", []).append(dict(edit, rejection=str(e)))
-                        work["issues"].append({"page": 0, "text": str(e) + ": " + edit["reason"]})
+                        matches = [i for i, block in enumerate(layout) if re.sub(r"\s+", "", edit["before"]) in re.sub(r"\s+", "", block["t"])]
+                        if len(matches) == 1 and work["text"].count(edit["before"]) == 1:
+                            i = matches[0]
+                            candidates.append({"before": edit["before"], "page": layout[i]["p"], "block": i,
+                                               "anchor": "", "reason": str(e) + ": " + edit["reason"]})
+                        else:
+                            work["issues"].append({"page": 0, "text": str(e) + ": " + edit["reason"]})
+                missing_captions = caption_labels(work["text"]) - caption_labels(draft)
+                caption_edits = [e for e in direct if (caption_labels(work["text"]) -
+                    caption_labels(c.patches(work["text"], [e]))) & missing_captions]
+                if caption_edits:
+                    work.setdefault("withheld_direct", []).extend(dict(e, rejection="Caption relocation incomplete") for e in caption_edits)
+                    work["issues"].append({"page": 0, "text": "Incomplete caption relocation withheld; original caption retained."})
+                    direct = [e for e in direct if e not in caption_edits]
                 blocked = apply_edits(work, direct, d, 0)
                 direct = [e for e in direct if e not in blocked]
                 if blocked:
@@ -339,6 +412,13 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                     if candidate not in candidates:
                         candidates.append(candidate)
                 work.setdefault("screen_notes", []).extend(result["issues"])
+            for candidate in candidates:
+                block = candidate.get("block", -1)
+                if 0 <= block < len(layout):
+                    before = re.sub(r"\s+", "", candidate["before"])
+                    content = re.sub(r"\s+", "", layout[block]["t"])
+                    if before and before in content:
+                        candidate["page"] = layout[block]["p"]
             work["candidates"] = [dict(x, id=i) for i, x in enumerate(candidates)]
             c._write(d, wf.name, work)
         for i, candidate in enumerate(work["candidates"]):
@@ -395,11 +475,13 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                     c._write(d, wf.name, work)
                 edits = []
                 proposed_text = work["text"]
+                proposed_local = local
                 for edit in result["edits"]:
                     try:
-                        if edit["before"] not in local:
+                        if edit["before"] not in proposed_local:
                             raise ValueError("outside supplied context")
                         proposed_text = c.patches(proposed_text, [edit])
+                        proposed_local = c.patches(proposed_local, [edit])
                         edits.append(edit)
                     except ValueError as e:
                         work["issues"].append({"page": page, "text": str(e)})
@@ -417,7 +499,7 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                         raise RuntimeError("Independent review omitted an edit decision")
                     accepted = []
                     blocked = []
-                    for decision in decisions:
+                    for decision in sorted(decisions, key=lambda x: x["index"]):
                         edit = edits[decision["index"]]
                         if decision["verdict"] == "accept":
                             accepted.append(dict(edit, verification=decision["reason"]))
