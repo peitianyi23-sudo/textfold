@@ -10,6 +10,22 @@ from tests import test_correction as fixtures
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_deepseek_image_and_text_requests_keep_the_requested_thinking_level(self):
+        base = "https://api.deepseek.com/v1"
+        reply = {"choices": [{"message": {"content": '{"edits": [], "issues": [], "displays": []}'}}]}
+        for level in (None, "low", "xhigh", "off"):
+            with self.subTest(level=level), patch.object(llm_openai, "_post", return_value=reply) as post:
+                spec = {**SPEC, "base": base, "model": "deepseek-flash", "effort": level}
+                llm_openai.vision("Check original", correction.SCHEMA, spec, [b"original image"])
+                url, body, _, _ = post.call_args.args
+                self.assertEqual(url, base + "/chat/completions")
+                self.assertEqual(body["messages"][1]["content"][1]["type"], "image_url")
+                expected = {"thinking": {"type": "disabled"}} if level == "off" else {
+                    "thinking": {"type": "enabled"}, "reasoning_effort": "high" if level == "xhigh" else level or "low"}
+                self.assertEqual(llm_openai.reasoning(base, level)[0], expected)
+                for key, value in expected.items():
+                    self.assertEqual(body[key], value)
+
     def test_transient_image_500_retries_the_same_image_request(self):
         failed = urllib.error.HTTPError("http://127.0.0.1:10531/v1/responses",500,"temporary bridge failure",{},None)
         done = {"status":"completed","output":[{"content":[{"type":"output_text", "text":

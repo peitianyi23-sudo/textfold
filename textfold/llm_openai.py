@@ -53,6 +53,8 @@ def vision(prompt, schema, spec, images, timeout=900, stop=None, on_retry=None):
         body = {"model": spec["model"], "messages": [{"role": "system", "content": system},
                 {"role": "user", "content": [{"type": "text", "text": text}] +
                  [{"type": "image_url", "image_url": {"url": u, "detail": "high"}} for u in urls]}]}
+        if "deepseek.com" in urllib.parse.urlparse(base).netloc:
+            body.update(reasoning(base, spec.get("effort"))[0])
         result = _vision_post(base + "/chat/completions", body, headers, timeout, stop, on_retry)
         reply = (result.get("choices") or [{}])[0].get("message", {}).get("content") or ""
     from .agents import parse_json
@@ -107,6 +109,13 @@ def reasoning(base, level):
     OpenAI's reasoning_effort (which many take), for off down to the least a model allows (some always think), and
     last {} (the model's default), which every endpoint takes."""
     host = urllib.parse.urlparse(base).netloc
+    if "deepseek.com" in host:
+        # Keep an unspecified level low; an explicit xhigh maps to DeepSeek's native high.
+        level = level or "low"
+        if level == "xhigh":
+            level = "high"
+        return [{"thinking": {"type": "disabled"}}] if level == "off" else [
+            {"thinking": {"type": "enabled"}, "reasoning_effort": level}]
     if level is None:
         return ([{"reasoning": {"enabled": True}}] if "openrouter.ai" in host else []) + [{}]
     on = level != "off"

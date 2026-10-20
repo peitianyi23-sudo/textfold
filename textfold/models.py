@@ -119,7 +119,7 @@ def resolve(model_id=None, s=None):
             raise RuntimeError("No model is available: install Claude Code, Codex or Pi, or add an API provider in the settings")
     if model_id in LEGACY_ALIASES:  # the command line's --model sonnet
         model_id = f"claude/claude-code/{model_id}"
-    effort = None   # set per task (for_task); the per-model efforts of v0.9 and before are no longer read
+    effort = None   # agents use task defaults; API providers retain the saved model effort
     rt = agents.runtime_of(model_id)
     if rt:
         rest = model_id[len(agents.PREFIX[rt]):]
@@ -128,7 +128,8 @@ def resolve(model_id=None, s=None):
     for p in provider_list(s):
         if any(m["id"] == model_id for m in p["models"]):
             return {"id": model_id, "kind": "api", "protocol": p["protocol"], "base": p["base"], "api_key": p["api_key"],
-                    "provider": p["name"], "model": model_id, "effort": None}
+                    "provider": p["name"], "model": model_id,
+                    "effort": "low" if model_id == "deepseek-flash" else (s.get("efforts") or {}).get(model_id)}
     raise RuntimeError(f"Model {model_id} is not available (its agent or provider is gone)")
 
 

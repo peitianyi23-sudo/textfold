@@ -33,7 +33,7 @@ ENV_PROVIDERS = [
     {"key": "google", "name": "Google", "env": ["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"], "list": "GOOGLE_MODELS",
      "base": "https://generativelanguage.googleapis.com/v1beta/openai", "models": ["gemini-2.5-pro", "gemini-2.5-flash"]},
     {"key": "deepseek", "name": "DeepSeek", "env": ["DEEPSEEK_API_KEY"], "list": "DEEPSEEK_MODELS", "base": "https://api.deepseek.com/v1",
-     "models": ["deepseek-v4-flash", "deepseek-v4-pro"]},
+     "models": ["deepseek-flash", "deepseek-v4-pro"]},
     {"key": "moonshot", "name": "Kimi", "env": ["MOONSHOT_API_KEY"], "list": "MOONSHOT_MODELS", "base_env": "MOONSHOT_BASE_URL",
      "base": "https://api.moonshot.cn/v1", "models": ["kimi-k2-turbo-preview", "kimi-latest"]},
     {"key": "openrouter", "name": "OpenRouter", "env": ["OPENROUTER_API_KEY"], "list": "OPENROUTER_MODELS", "base": "https://openrouter.ai/api/v1",
