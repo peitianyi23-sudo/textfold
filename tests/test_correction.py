@@ -215,5 +215,20 @@ class CorrectionTests(unittest.TestCase):
                 llm_openai.vision("check", correction.SCHEMA, SPEC, [b"page pixels"])
 
 
+    def test_model_copied_mineru_control_character_remains_an_exact_patch_anchor(self):
+        before = "boundary\x01condition"
+        obj = {"edits": [{"before": before, "after": "boundary condition", "reason": "split delimiter"}],
+               "issues": [], "displays": []}
+        response = json.dumps(obj).replace("\\u0001", "\x01")
+        with self.subTest(path="text"), patch.object(llm_openai, "_post", return_value={
+                "choices": [{"message": {"content": response}}]}):
+            out, _ = llm_openai.call("check", correction.SCHEMA, SPEC, "system", 900)
+            self.assertEqual(out["edits"][0]["before"], before)
+        with self.subTest(path="images"), patch.object(llm_openai, "_post", return_value={
+                "status": "completed", "output": [{"content": [{"type": "output_text", "text": response}]}]}):
+            out = llm_openai.vision("check", correction.SCHEMA, SPEC, [b"source image"])
+            self.assertEqual(out["edits"][0]["before"], before)
+
+
 if __name__ == "__main__":
     unittest.main()

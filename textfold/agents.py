@@ -322,7 +322,8 @@ def _strict(schema):
 def parse_json(text, schema=None):
     """The reply's JSON object, asked for in the prompt: the first object that parses (and has the schema's required
     keys), wherever it starts. A model that is not reasoning sometimes adds a line after the object, or repeats it."""
-    text, dec = text or "", json.JSONDecoder()
+    # Keep literal MinerU control characters in exact correction anchors.
+    text, dec = text or "", json.JSONDecoder(strict=False)
     need = set((schema or {}).get("required", []))
     first = None
     for m in re.finditer(r"\{", text):
