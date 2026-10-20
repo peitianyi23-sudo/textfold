@@ -141,7 +141,7 @@ def apply_edits(work, edits, d, page):
     return blocked
 
 
-def block_crop(pdf, block):
+def block_crop(pdf, block, layout=()):
     """MinerU normalized top-left box, expanded to readable local context."""
     from .engine import PDFIUM
     with PDFIUM:
@@ -152,6 +152,17 @@ def block_crop(pdf, block):
             # Retain complete extracted block and surrounding labels/lines.
             left, right = max(0, x0*w-18), min(w, x1*w+18)
             bottom, top = max(0, (1-y1)*h-48), min(h, (1-y0)*h+48)
+            # Equation-body boxes omit right-margin labels. Nearby same-column
+            # extraction blocks establish the readable column width without an anchor.
+            while True:
+                nearby = [b["b"] for b in layout if b["p"] == block["p"] and len(b["b"]) == 4
+                          and b["b"][0]*w < right and b["b"][2]*w > left
+                          and (1-b["b"][3])*h < top and (1-b["b"][1])*h > bottom]
+                bounds = (max(0, min([left] + [b[0]*w-18 for b in nearby])),
+                          min(w, max([right] + [b[2]*w+18 for b in nearby])))
+                if bounds == (left, right):
+                    break
+                left, right = bounds
             bitmap = p.render(scale=2.4, crop=(left, bottom, w-right, h-top))
             try:
                 buf = io.BytesIO()
@@ -177,7 +188,7 @@ def evidence(pdf, candidates, text, layout, total):
             if existing:
                 existing["candidates"].append(candidate.get("id", n))
             else:
-                images.append(block_crop(pdf, layout[block]))
+                images.append(block_crop(pdf, layout[block], layout))
                 attribution.append({"image": len(images), "page": page, "block": block, "candidates": [candidate.get("id", n)]})
             located.append(candidate)
         else:

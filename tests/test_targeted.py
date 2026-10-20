@@ -279,3 +279,18 @@ class TargetedTests(unittest.TestCase):
         vision.assert_not_called()
         self.assertIn("physical plausibility", call.call_args.args[0])
         self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), text)
+
+
+    def test_narrow_equation_box_retains_neighbor_column_and_printed_label(self):
+        import json
+        import pypdfium2 as pdfium
+        from PIL import Image
+        # Extractors can box the formula body separately from its right-margin label.
+        layout = [{"p": 1, "b": [.32, .38, .6, .41], "t": "$x=y$"},
+                  {"p": 1, "b": [.08, .32, .92, .37], "t": "Full column context"}]
+        candidate = {"page": 1, "block": 0, "before": "Broken", "anchor": "", "reason": "missing label"}
+        with pdfium.PdfDocument(str(self.d/"source.pdf")) as pdf:
+            images, located, _ = targeted.evidence(pdf, [candidate], "Broken", layout, 2)
+        self.assertEqual(located, [candidate])
+        with Image.open(io.BytesIO(images[0])) as image:
+            self.assertGreater(image.width, 1200)
