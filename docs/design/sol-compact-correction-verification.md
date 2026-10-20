@@ -1,8 +1,9 @@
 # Compact source correction: Sol / medium
 
-2026-10-20. **Not accepted for personal integration.** The completed same-model pair is faster and materially
-smaller, but Clercx still has an incorrectly localized question, an incomplete caption repair, and withheld
-front matter. Keep `codex/sol-compact-correction` and its worktree for review. No push or PR.
+2026-10-20. **Retained for review; not integrated into personal.** The three Clercx failures from the completed
+pair are now closed by the real local-model replay described below. The historical pair and its original quality
+failure remain recorded unchanged; local closure is not a new whole-paper acceptance or speed result.
+Keep `codex/sol-compact-correction` and its worktree for review. No push or PR.
 
 ## Implementation and boundary
 
@@ -20,8 +21,8 @@ Saved API effort handling and the supplied provider edits were carried forward. 
 its selected provider were not changed or restarted; no connection tests were repeated.
 
 Measured implementation: `c20e344`. Baseline targeted module: frozen `c0fa57d`, with the same current application
-adapters. Final branch also contains **local-only** follow-up `f41278d`, described below; its full-paper behavior
-has not been measured. Do not attribute the measured result to that later fix.
+adapters. Follow-up `f41278d` and title-region fix `122d871` have the three-case local evidence below; their
+full-paper behavior has not been measured. Do not attribute the paired timing to these later fixes.
 
 ## Fixed cases and paired protocol
 
@@ -73,7 +74,7 @@ resubmit all images. Model/API waiting remains the dominant cost; reducing image
 the observed time reduction. Timing covers correction through source publication, excluding initial import and
 derived reading-layer generation.
 
-## Actual source quality
+## Actual source quality in the measured pair
 
 All twelve original PDF pages were rendered and inspected locally. Accepted patches were checked against those
 pages and the focused original crops. Replaying each run's complete accepted history from a fresh identical import
@@ -85,18 +86,19 @@ Boffetta compact fixes both false E bars, the 273 exponent, full contour list, m
 resolution/subscript faults and the printed negative skewness. It retains printed 16386, computing, dumping,
 3.2 and (e,r). One nonunique coefficient spelling proposal remains withheld. Clercx compact correctly restores
 the known exponent, omega-zero, nu, tau, lambda and grant separators without changing the correct lambda to l.
-No new mathematical mis-edit was identified in these inspected accepted patches. Nevertheless, quality fails:
+No new mathematical mis-edit was identified in these inspected accepted patches. Nevertheless, that measured
+version failed quality:
 
 - Clercx's page-2 barred-k question was moved to page 4. A phrase occurring twice on page 2 was discarded by the
   per-page unique-anchor helper, making its single page-4 occurrence appear globally unique. The model correctly
   reported insufficient evidence; the false bar remains. The old paired output repairs it.
 - The Clercx title/author restoration was withheld: the supplied region showed the affiliation/author area but
-  not the title. The old output restores both. This source-region selection limitation remains.
+  not the title. The old output restores both. This source-region selection limitation was still present in that run.
 - Figure 4's question covered only one inline math span. Its middle legend entry was repaired, but the initial
   parenthesis/plus-marker segment remained damaged while the narrow candidate was declared corrected. The old
   output repairs the complete legend. Full surrounding context alone did not ensure a complete investigation unit.
 
-## Local-only follow-up and review
+## Initial local-only follow-up and review
 
 Both observed anchor/caption problems first failed small regression tests. `f41278d` counts **all** anchor hits
 across pages and expands a caption-contained question to its complete figcaption before investigation. Replaying
@@ -104,7 +106,7 @@ the actual saved localization question locally now selects page 2 / block 24, ra
 localization, not a fresh model answer. The caption test verifies complete question packaging, not model fidelity.
 No further whole-paper run was made; these fixes do not retroactively pass acceptance.
 
-Final local suite: `python -m unittest discover -s tests -q`: 237 tests, 234 passed, three existing platform skips.
+Pre-closeout local suite: `python -m unittest discover -s tests -q`: 237 tests, 234 passed, three existing platform skips.
 Existing subprocess/socket ResourceWarnings remain non-failing. [Two-axis review](sol-compact-correction-review.md)
 found no standards violation and one resume defect, fixed and checked separately. Real-run quality findings above
 take precedence over unit tests and review approval. No ten-paper expansion, personal merge, push or PR occurred.
@@ -114,3 +116,52 @@ ignored `launch/sol-compact-correction/`. `summary.json` records aggregate/stage
 and `sol-new/http.json` contain request measurements and responses, without authorization headers or keys.
 `localization-followup.json` preserves the actual local correction of the page error. Keep this worktree to retain
 these ignored artifacts. The reviewable Git diff is `git diff c0fa57d...codex/sol-compact-correction`.
+
+## Three-case live closeout
+
+The subsequent user instruction authorized only these three real failures, retaining this branch without merging
+personal or running another full-paper benchmark. Existing anchor/caption fixes remain. `122d871` also includes
+consecutive same-page source blocks missing immediately before the retained insertion anchor. For Clercx this
+selects source blocks 0–2: title, author line and affiliation. Both native character evidence and the rendered crop
+include the missing content, instead of cropping only around the affiliation. This selects evidence; it does not
+deterministically invent or correct source text. The new title-evidence regression failed before this change and passed after it.
+
+`tools/probe_compact_closeout.py` reuses the original stored screening candidates at blocks 2, 24 and 38, the same
+saved original import, retained layout and PDF. It runs the current production normalization, evidence selection,
+decision and publication code with only those three candidates. Screening is replayed from the saved response;
+no new whole-document inference occurs. Images are requested explicitly for these local validation questions.
+
+```powershell
+python tools/probe_compact_closeout.py prepare
+python tools/probe_compact_closeout.py run
+```
+
+Preparation stops before inference so the actual production crops can be inspected. The three images visibly
+contain the complete title/author area on page 1, the questioned unbarred spectrum on page 2, and the complete
+Figure 4 caption on page 4. The continuation resumes only these questions. One actual application bridge request
+used `gpt-6.1-sol` / medium with three images (268,723 PNG bytes; 373,508 HTTP body bytes), no failed/retried
+attempt, and no reported cached input. Returned usage: 5,963 input tokens, 965 output tokens including 70 reasoning
+tokens. These are local-request receipts, not another throughput or end-to-end speed comparison.
+
+All three decisions returned corrected, and exactly three patches were accepted and published:
+
+- The complete printed title and `H. J. H. Clercx and G. J. F. van Heijst` were inserted before the affiliation.
+- The page-2 question stayed on page 2 / block 24; its false bar was removed, retaining the printed exponent −3.
+- One atomic replacement of the entire Figure 4 figcaption restores the two dashes on each side of plus, times
+  and star, associates them with Re = 5000, 10000 and 20000, and places one pair of parentheses around the full
+  three-entry legend. The leading prose, $2\delta(\tau)$, $\lambda_i(\tau)$, panel labels and image path are retained.
+
+The actual published source was compared with the original crops and exact patch history, not just the model's
+completion labels. There are no unresolved issues or publication rejections for these three cases. Every changed
+byte is inside one of the three supplied question units; replaying the accepted edits exactly reproduces the
+published source. The original correct lambda relation and time formula elsewhere remain byte-for-byte present.
+Figure 4's previously correct leading prose and symbols are unchanged. Other existing extraction faults are outside
+this replay's scope; this result does not assert that the whole paper is corrected.
+
+Related regression command: `python -m unittest tests.test_pdf_text_evidence tests.test_targeted tests.test_correction -q`:
+60 tests passed. The original 14.8% single-pair observation and its limitations above are unchanged. No two-paper
+rerun, sample expansion, personal integration, daily-service restart, push or PR occurred.
+
+All live evidence is retained under ignored `launch/sol-compact-correction/local-closeout-20261020/`:
+`prepare-request-1-image-{1,2,3}.png`, the corresponding actual request images/prompts, `run-http.json`,
+`result.json`, `audit.json`, `source.diff`, and the task-owned published source plus full decision history.

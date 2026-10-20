@@ -23,4 +23,17 @@ faulty-font fallback, removal of blanket review and candidate-level publication 
 Subsequent real-paper checking found the localization and partial-caption failures documented in verification;
 local follow-up `f41278d` was independently reviewed with no further substantiated issue. It has regression coverage but no new whole-paper acceptance measurement.
 
-Standards: 0 findings. Spec: 1 finding, resolved. **Delivery acceptance remains failed; do not merge personal.**
+Standards: 0 findings. Spec: 1 finding, resolved. The historical paired-run quality failure is preserved;
+do not merge personal.
+
+## Three-case closeout
+
+User-authorized local follow-up `122d871` adds the missing same-page prefix blocks to title evidence. The actual
+production replay now supplies complete title/author, page-2 formula and full Figure 4 caption crops. One live
+Sol/medium request returns three complete repairs, all published with no unresolved issue or rejected patch.
+The published diff changes only those three question units and preserves the existing correct lambda/time
+notation and caption lead. The Figure 4 repair is a single full-caption edit, including every legend entry and
+the enclosing parentheses. See the live-closeout section and retained audit in verification.
+
+This closes the three reported local failures. It does not replace the earlier full-paper result or establish a
+new speed/generalization claim. The latest instruction explicitly keeps the result on this branch for review.
