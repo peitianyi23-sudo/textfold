@@ -2,6 +2,7 @@
 import io
 import copy
 from collections import Counter
+from html import unescape
 import json
 import re
 import time
@@ -111,6 +112,55 @@ def number_values(text):
     return Counter(re.findall(r"[-+]?\d+(?:\.\d+)?", re.sub(r"\s+", "", text)))
 
 
+
+def compact(text):
+    """Compare retained HTML-math captions with the equivalent MinerU Markdown."""
+    return re.sub(r"\s+|\$", "", unescape(re.sub(r"</?span\b[^>]*>", "", text)))
+
+
+def math_marks(text):
+    return Counter(len(m[0]) for m in re.finditer(r"(?<!\\)\$\$|(?<![\\$])\$(?!\$)", text))
+
+
+def source_candidate(edit, text, layout, pages):
+    """Use retained block identity, then a unique literal nearby PDF text anchor."""
+    before = edit["before"]
+    if not before or text.count(before) != 1:
+        return None
+    matches = [i for i, b in enumerate(layout) if compact(before) in compact(b["t"])]
+    if len(matches) == 1:
+        i = matches[0]
+        return {"before": before, "page": layout[i]["p"], "block": i, "anchor": "", "reason": edit["reason"]}
+    at = text.index(before)
+    words = re.findall(r"\w+", text[max(0, at-160):at+len(before)+160])
+    for i in range(len(words)-3):
+        anchor = " ".join(words[i:i+4])
+        found = [p+1 for p, content in enumerate(pages) if locate(content, anchor) is not None]
+        if len(found) == 1:
+            return {"before": before, "page": found[0], "block": -1, "anchor": anchor, "reason": edit["reason"]}
+    return None
+
+
+def reference_cues(edits, pages):
+    """Bounded PDF text retrieval helps review a newly restored bibliography prefix."""
+    cues = []
+    for edit in edits:
+        label = re.match(r"\[\d+\]", edit["after"].lstrip())
+        if not label or edit["before"].lstrip().startswith(label[0]):
+            continue
+        if not re.search(r"\b(?:J\.|Phys\.|Sci\.|Rev\.)", edit["after"]):
+            continue
+        page = edit.get("page", 0)
+        if not 1 <= page <= len(pages):
+            continue
+        words = re.findall(r"\w+", edit["after"])
+        for i in range(len(words)-3):
+            span = locate(pages[page-1], " ".join(words[i:i+4]))
+            if span:
+                cues.append({"page": page, "text": pages[page-1][max(0, span[0]-80):span[1]+320]})
+                break
+    return cues
+
 def caption_labels(text):
     """Standalone extractor caption labels, retained across a direct relocation."""
     return set(re.findall(r"(?m)^(?:FIG(?:URE)?\.?|TABLE)\s+(\d+[A-Za-z]?|[IVX]+)[.:]", text))
@@ -157,6 +207,22 @@ def apply_edits(work, edits, d, page):
             except ValueError:
                 blocked.append(edit)
         work["issues"].append({"page": page, "text": "Unresolved footnote dependency: " + ", ".join(sorted(dangling))})
+    old_marks, new_marks = math_marks(work["text"]), math_marks(text)
+    new_unbalanced = {kind for kind in (1, 2) if new_marks[kind] % 2 and not old_marks[kind] % 2}
+    if new_unbalanced:
+        for edit in edits:
+            counts_before, counts_after = math_marks(edit["before"]), math_marks(edit["after"])
+            if any((counts_after[k]-counts_before[k]) % 2 for k in new_unbalanced):
+                blocked.append(edit)
+        text = work["text"]
+        for edit in edits:
+            if edit in blocked:
+                continue
+            try:
+                text = c.patches(text, [edit])
+            except ValueError:
+                blocked.append(edit)
+        work["issues"].append({"page": page, "text": "Unbalanced math boundary repair withheld; original extraction retained."})
     c.render(text, c._images((d/"source.md").read_text(encoding="utf-8"),
                             (d/"source.html").read_text(encoding="utf-8")))
     work["text"] = text
@@ -388,11 +454,10 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                         direct.append(dict(edit, verification="Document context; not visually compared with PDF"))
                     except ValueError as e:
                         work.setdefault("withheld_direct", []).append(dict(edit, rejection=str(e)))
-                        matches = [i for i, block in enumerate(layout) if re.sub(r"\s+", "", edit["before"]) in re.sub(r"\s+", "", block["t"])]
-                        if len(matches) == 1 and work["text"].count(edit["before"]) == 1:
-                            i = matches[0]
-                            candidates.append({"before": edit["before"], "page": layout[i]["p"], "block": i,
-                                               "anchor": "", "reason": str(e) + ": " + edit["reason"]})
+                        candidate = source_candidate(edit, work["text"], layout, pages)
+                        if candidate:
+                            candidate["reason"] = str(e) + ": " + candidate["reason"]
+                            candidates.append(candidate)
                         else:
                             work["issues"].append({"page": 0, "text": str(e) + ": " + edit["reason"]})
                 missing_captions = caption_labels(work["text"]) - caption_labels(draft)
@@ -406,6 +471,14 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                 direct = [e for e in direct if e not in blocked]
                 if blocked:
                     work.setdefault("withheld_direct", []).extend(blocked)
+                    for edit in blocked:
+                        if math_marks(edit["before"]) != math_marks(edit["after"]):
+                            candidate = source_candidate(edit, work["text"], layout, pages)
+                            if candidate:
+                                candidates.append(candidate)
+                                note = "Unbalanced math boundary repair withheld; original extraction retained."
+                                work["issues"] = [x for x in work["issues"] if x["text"] != note]
+                                work.setdefault("screen_notes", []).append("A malformed text-only math proposal was withheld and routed to PDF investigation; use the current source and later PDF outcome.")
                 if direct:
                     work["history"].append({"page": 0, "stage": "document-text", "edits": direct})
                 for candidate in result["candidates"]:
@@ -415,10 +488,14 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
             for candidate in candidates:
                 block = candidate.get("block", -1)
                 if 0 <= block < len(layout):
-                    before = re.sub(r"\s+", "", candidate["before"])
-                    content = re.sub(r"\s+", "", layout[block]["t"])
+                    before = compact(candidate["before"])
+                    content = compact(layout[block]["t"])
                     if before and before in content:
                         candidate["page"] = layout[block]["p"]
+                if candidate.get("anchor"):
+                    found = [p+1 for p, source in enumerate(pages) if locate(source, candidate["anchor"]) is not None]
+                    if len(found) == 1 and found[0] != candidate["page"]:
+                        candidate.update(page=found[0], block=-1)
             work["candidates"] = [dict(x, id=i) for i, x in enumerate(candidates)]
             c._write(d, wf.name, work)
         for i, candidate in enumerate(work["candidates"]):
@@ -494,6 +571,13 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                         "Explain visible evidence; return one decision per index.\n" +
                         json.dumps([dict(e, index=i) for i, e in enumerate(edits)], ensure_ascii=False) +
                         "\nIMAGE ATTRIBUTION:\n" + json.dumps(attribution))
+                    cues = reference_cues(edits, pages)
+                    if cues:
+                        review_prompt += ("\nNewly restored bibliography: transcribe abbreviations literally, even when "
+                            "misspelled or contrary to a familiar journal name. Do not complete a citation from memory. "
+                            "The following existing PDF text is a noisy retrieval aid, never authority; compare every "
+                            "discrepancy with the actual image and mark unresolved if its tiny letters are unclear.\n" +
+                            json.dumps(cues, ensure_ascii=False))
                     decisions = request(review_prompt, c.REVIEW, images, "独立复核")["decisions"]
                     if sorted(x["index"] for x in decisions) != list(range(len(edits))):
                         raise RuntimeError("Independent review omitted an edit decision")

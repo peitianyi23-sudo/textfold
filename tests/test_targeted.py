@@ -404,3 +404,59 @@ class TargetedTests(unittest.TestCase):
         self.assertEqual(vision.call_count, 1)
         self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), text)
         self.assertEqual(correction.state(PID)["issues"], [])
+
+
+    def test_partial_math_boundary_repair_cannot_publish_a_dangling_dollar(self):
+        text = self.md + "\nEven for the $1 6 3 8 4 \\mathrm { run }$, where the spectrum is measured.\n"
+        (self.d/"source.md").write_text(text, encoding="utf-8")
+        (self.d/"source.html").write_text(correction.render(text, {}), encoding="utf-8")
+        correction.queue(PID)
+        edit = {"before": "1 6 3 8 4 \\mathrm { run }", "after": "1 6 3 8 4$ run",
+                "reason": "A later companion will remove the old closing dollar", "evidence": "document-text"}
+        with patch.object(llm, "call", return_value=({"out": {"edits": [edit], "candidates": [], "issues": []}}, False)), \
+             patch.object(llm_openai, "vision") as vision:
+            correction.run(PID, SPEC)
+        vision.assert_not_called()
+        self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), text)
+        self.assertTrue(any("math boundary" in x["text"] for x in correction.state(PID)["issues"]))
+
+    def test_markdown_only_fallback_locates_rejected_repair_without_an_extra_model_call(self):
+        pages = ["Unrelated source page.", "Even for the 16 384 run, where we measure a spectrum."]
+        text = "Even for the $1 6 3 8 4 \\mathrm { run }$, where we measure a spectrum."
+        edit = {"before": "1 6 3 8 4 \\mathrm { run }", "reason": "boundary repair"}
+        candidate = targeted.source_candidate(edit, text, [], pages)
+        self.assertEqual(candidate["page"], 2)
+        self.assertIsNotNone(targeted.locate(pages[1], candidate["anchor"]))
+
+    def test_retained_html_math_caption_matches_markdown_math(self):
+        edit = {"before": "$C _ { 1 } (\\Gamma) ( N u - 1 )$", "reason": "numeric evidence"}
+        layout = [{"p": 10, "b": [.1, .2, .9, .4],
+                   "t": 'Caption <span class="math inline">C _ { 1 } (\\Gamma) ( N u - 1 )</span>.'}]
+        candidate = targeted.source_candidate(edit, edit["before"], layout, [""] * 10)
+        self.assertEqual((candidate["block"], candidate["page"]), (0, 10))
+        self.assertEqual(targeted.compact("$x < y > z$"), "x<y>z")
+
+
+    def test_unique_pdf_anchor_overrides_a_contradicted_guessed_page(self):
+        import json
+        from reportlab.pdfgen import canvas
+        cv = canvas.Canvas(str(self.d/"source.pdf"), pagesize=(600, 800))
+        cv.drawString(50, 700, "Unrelated source geometry on the first page.");cv.showPage()
+        cv.drawString(50, 700, "The actual scaling exponent agrees excellently here.");cv.save()
+        (self.d/"layout.json").write_text(json.dumps([
+            {"p": 1, "b": [.1, .2, .9, .4], "t": "Broken turbuð Þlent flow."}]), encoding="utf-8")
+        correction.queue(PID)
+        response = self.screen()
+        response[0]["out"]["candidates"][0].update(block=0, page=1, anchor="The actual scaling exponent")
+        with patch.object(llm, "call", return_value=response), \
+             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"correct source"], anchors)) as crop, \
+             patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}):
+            correction.run(PID, SPEC)
+        self.assertEqual(crop.call_args.args[1], 2)
+
+    def test_new_reference_review_gets_literal_pdf_text_without_a_separate_call(self):
+        pages = ["[1] J. G. Charney, Geostrophic turbulence, J. Atom. Sci. 28, 1087 (1971)."]
+        edit = {"before": "Partial following citation", "after": "[1] J. G. Charney, Geostrophic turbulence, J. Atmos. Sci. 28, 1087 (1971).", "page": 1}
+        cues = targeted.reference_cues([edit], pages)
+        self.assertEqual(len(cues), 1)
+        self.assertIn("J. Atom. Sci.", cues[0]["text"])
