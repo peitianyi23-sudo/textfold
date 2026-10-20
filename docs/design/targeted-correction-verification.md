@@ -224,5 +224,15 @@ Raw inputs, request and retry receipts, independent PDF renders/reference cases,
 real-reader checks and GPU traces remain in the managed worktree's ignored `launch/targeted/` directory. Keep that
 worktree while these artifacts are needed. Test servers are stopped after checks.
 
-Merge and daily-service verification are pending. No push or upstream PR is authorized or performed. The separate
-cache-opening incident remains unresolved; this work does not claim to repair it.
+The implementation and verification report were fast-forward merged into `personal` at `e51c71b`. The daily
+3017 service was refreshed through its existing TextFoldPersonal launcher after verifying the owner and empty
+queues (PID 48076 to 92212). Its served reader assets match the merged source; the selected model remains
+`gpt-6.1-sol`, queues remain empty, and the sampled daily PDF/source/notes/layer bytes are unchanged. Experimental
+correction outputs were not copied into daily data. Receipts are `daily-service.json`, `daily-reader-check.json`
+and `daily-menu.json` under `launch/targeted/`.
+
+The refreshed daily reader passed actual equation visibility/body-preservation, caption toggle, narrow-screen
+and document-menu checks without browser errors. Existing unrelated glossary edits and two discussion documents
+in the primary checkout were preserved. This delivery receipt is a documentation-only follow-up to the deployed
+code. No push or upstream PR was performed. The separate cache-opening incident remains unresolved; this work
+does not claim to repair it.
