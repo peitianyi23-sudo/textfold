@@ -32,10 +32,12 @@ def system_for(meta):
     from . import kinds
     text = kinds.adapt(SYSTEM, meta)
     if (meta.get("correction") or {}).get("method") == "targeted":
-        text += " Targeted correction investigates suspicious passages only; do not claim exhaustive PDF verification."
+        text += (" Targeted correction investigates suspicious passages only; do not claim exhaustive PDF verification. "
+                 "Some repairs use unambiguous document context, without visual PDF comparison; do not describe "
+                 "every repaired passage as visually verified.")
     issues = (meta.get("correction") or {}).get("issues")
     if issues:
-        text += (" The PDF comparison left these source regions unresolved. Preserve relevant uncertainty in derived "
+        text += (" Extraction correction left these source regions unresolved. Preserve relevant uncertainty in derived "
                  "content; do not silently fill in missing symbols or words: " + json.dumps(issues, ensure_ascii=False))
     observations = (meta.get("correction") or {}).get("screen_notes")
     if observations:

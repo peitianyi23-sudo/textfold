@@ -194,7 +194,7 @@ def prompt(doc, note, question, lang, earlier=(), ui=None):
                else "\n".join(f"[{tag(uid)}] {line(uid)}" for uid in cite))
     selected = f'The selected text:\n"{quote}"\n\n' if quote else ""
     issues = (doc["meta"].get("correction") or {}).get("issues")
-    uncertainty = ("Unresolved PDF comparison issues (do not silently infer their missing content): " +
+    uncertainty = ("Unresolved extraction-correction issues (do not silently infer their missing content): " +
                    json.dumps(issues, ensure_ascii=False) + "\n") if issues else ""
     coverage = doc["meta"].get("correction") or {}
     if coverage.get("screen_notes"):
@@ -202,7 +202,9 @@ def prompt(doc, note, question, lang, earlier=(), ui=None):
                         "cautions or concerns resolved in the current source: " +
                         json.dumps(coverage["screen_notes"], ensure_ascii=False) + "\n")
     if coverage.get("method") == "targeted":
-        uncertainty += "Targeted correction investigates suspicious passages only, not exhaustive PDF verification.\n"
+        uncertainty += ("Targeted correction investigates suspicious passages only, not exhaustive PDF verification. "
+                        "Some repairs use unambiguous document context without visual PDF comparison; do not call "
+                        "every repaired passage visually verified.\n")
     if coverage and coverage.get("status") != "done":
         uncertainty += ("Only physical PDF pages " + str(coverage.get("checked", [])) +
                         " have completed PDF checking. Other passages/dependencies are UNCHECKED extraction. "
