@@ -757,7 +757,6 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
             pending = group
             # One initial decision, then only the questions it explicitly could not read.
             while pending:
-                now = time.perf_counter()
                 needs_image = [x for x in pending if x.get('image_required') or not any(
                     e['candidate'] == x['id'] and e['readable'] for e in native)]
                 prepared = {}
@@ -783,7 +782,6 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                                 'Unresolved exact source location: ' + candidate['reason']})
                     if not questions:
                         continue
-                    metrics['render_seconds'] += time.perf_counter()-now
                     source_runs = [{'candidate': e['candidate'], 'page': e['page'],
                         'runs': [[r['text'], r['x'], r['y'], r['size'], r['unmapped']] for r in e['runs']]}
                         for e in native if any(x['id'] == e['candidate'] for x in questions)]
