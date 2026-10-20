@@ -55,3 +55,20 @@ Backups, crop plans, reports, replay scripts and screenshots remain local under 
 - The four new crops were visually compared with their original PDF pages, including all panels,
   formula headings, axis labels and color scales. Both repaired Takeaway views were inspected.
 - Reader JavaScript and CSS are unchanged by this repair.
+
+## Live delivery
+
+The code was merged into `personal`, and both repaired items pass the same browser checks on the daily
+service at port 3017. The independent scheduled-task reader lists ten documents, including both Xu entries.
+
+Restart verification exposed Windows packaged-app data virtualization: these two entries existed under
+Codex's private `LocalCache/Local/TextFold/personal` view, while the independent reader saw only the eight
+older documents in normal app data. The verified complete item copies were published into the independent
+reader's normal data directory. The two private-cache item folders were archived under
+`launch/xu-figure-repair/virtualized-archive/`, preserving recovery copies and eliminating stale shadow copies.
+File-handle path inspection confirms that both live sources now resolve to normal app data. Their repaired
+files match the staged copies, and both PDFs match their pre-repair backups byte for byte.
+
+The original scheduled-task launcher and model configuration remain in use. The final service was restarted
+from the clean repository source after all temporary diagnostics and one-time publication code were removed.
+The local `delivery.json` records the final process and data-location verification.
