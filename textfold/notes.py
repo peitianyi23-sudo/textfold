@@ -197,6 +197,8 @@ def prompt(doc, note, question, lang, earlier=(), ui=None):
     uncertainty = ("Unresolved PDF comparison issues (do not silently infer their missing content): " +
                    json.dumps(issues, ensure_ascii=False) + "\n") if issues else ""
     coverage = doc["meta"].get("correction") or {}
+    if coverage.get("method") == "targeted":
+        uncertainty += "Targeted correction investigates suspicious passages only, not exhaustive PDF verification.\n"
     if coverage and coverage.get("status") != "done":
         uncertainty += ("Only physical PDF pages " + str(coverage.get("checked", [])) +
                         " have completed PDF checking. Other passages/dependencies are UNCHECKED extraction. "

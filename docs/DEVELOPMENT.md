@@ -356,7 +356,7 @@ renumbering into retained layers before regenerating affected captions, aggregat
 
 ### PDF extraction correction (personal)
 
-New PDF imports of **30 physical pages or fewer** queue full checking against retained `source.pdf`. The count
+New PDF imports of **30 physical pages or fewer** queue targeted correction against retained `source.pdf`. The count
 includes front matter, references and appendices. Longer documents open their extraction without automatic model
 work. The PDF notice offers explicit physical page ranges (including noncontiguous ranges), the author's reliably
 mapped heading sections, and an explicit whole-document action. Opening, scrolling or navigating never selects work.
@@ -383,7 +383,24 @@ can resume. Existing papers are enrolled explicitly; there is no whole-library r
 some completed coverage and carry explicit unchecked provenance for the rest. Selected-range generation receives
 available outside extraction as unchecked context, never recursively checking dependencies.
 
-Every selected page receives a full comparison with surrounding extraction context. Proposed exact Markdown edits
+Default correction first screens MinerU Markdown with the selected PDF's existing text layer, in groups of up to
+six physical pages. Candidate passages include damaged mathematics/prose, control-character residue, fragmented
+text and missing passages or numbered displays. Unique literal PDF anchors retain their original character offsets;
+PDFium coordinates locate context crops. Candidates on the same physical page share a proposal request and an
+independent review request; overlapping source rectangles are merged before rendering. Column line geometry keeps
+formula labels and paragraph edges inside each crop. Ambiguous anchors and unreadable regions remain
+unresolved, with no automatic full-page escalation. A textless PDF explicitly retains this limitation. No new OCR,
+embedding service or producer-cache rewrite is involved. `targeted-work.json` retains screening, reviewed draft and
+completed candidate groups across interruption; existing prompt caching reuses successful screening requests.
+Targeted completion leaves physical `checked` coverage empty and records its method separately; derived layers
+start after that workflow ends and receive its unresolved issues.
+
+The document menu offers **Check whole document**, range selection and correction records. Scope controls stay
+collapsed until requested; only the existing job toast shows running progress. Explicit range/chapter/document
+requests use the exhaustive workflow below. Starting explicit checking after targeted correction retains the
+corrected source but starts a separate physical-page checkpoint.
+
+Every explicitly selected page receives a full comparison with surrounding extraction context. Proposed exact Markdown edits
 receive a separate image-backed review using merged touching/overlapping context crops; every edit still receives
 its own decision. A numbered restoration already in the initial proposal does not trigger another restoration call.
 If independent review rejects it and the number remains missing, targeted restoration continues using that feedback.
@@ -437,7 +454,7 @@ found unlawful without consent in 2022.)
 
 ## Smoothness is a rule
 
-PDF correction runs one request at a time: each physical page's full comparison and independent edit review finish
+Explicit full PDF checking runs one request at a time: each physical page's full comparison and independent edit review finish
 before the next page starts. Multi-request experiments did not establish an overall speedup and were rolled back
 to serial checking at the user's request. Reading-order text anchors
 localize Markdown even when it came from a finalized cache without block coordinates; scans can use extractor
@@ -529,6 +546,6 @@ them by number. A parser change that reads more of a page (description lists, Oc
 the new ones, so a paper generated before it needs its layers made again, or its atom numbers mapped from the old parse
 to the new one by content and order.
 
-Completed PDF checking keeps its receipt in paper metadata and omits the fixed correction banner. Unfinished,
-interrupted and failed checks retain the existing range/resume controls. Completion reloads the reader through
-the existing job watcher, so the banner disappears automatically.
+PDF correction keeps its receipt in paper metadata and its controls inside the document menu. Interrupted and failed
+checks can resume explicitly there. Running progress uses the existing job toast; completion reloads the reader and
+removes progress automatically. A targeted receipt explicitly says that full page-by-page checking has not run.

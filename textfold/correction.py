@@ -74,19 +74,20 @@ def _write(d, name, value):
     tmp.replace(f)
 
 
-def queue(pid, reset=False):
+def queue(pid, reset=False, method="targeted"):
     """Called only for a newly imported PDF, or an explicit repair request for an existing one."""
     d = store.pdir(pid)
     if reset:
         # A deliberate engine reconversion replaces the extraction, so the old
         # draft and coverage no longer describe that source. Scope changes don't reset.
         (d / "correction-work.json").unlink(missing_ok=True)
+        (d / "targeted-work.json").unlink(missing_ok=True)
     if pid.startswith("pdf-") and (d / "source.md").exists() and (d / "source.pdf").exists() and (reset or not state(pid)):
         count = scopes.total(pid)
         previous = {} if reset else (state(pid) or {})
         _write(d, "correction.json", {**previous, "status": "queued" if count <= scopes.LIMIT else "awaiting-scope",
                 "done": previous.get("done", 0), "total": count, "issues": previous.get("issues", []),
-                "checked": previous.get("checked", []),
+                "checked": previous.get("checked", []), "method": method,
                 "scope": {"kind": "document", "pages": list(range(1, count + 1))} if count <= scopes.LIMIT else None})
 
 
@@ -368,6 +369,20 @@ def page_ranges(text, page_texts):
 
 
 def run(pid, spec, progress=lambda *a: None, stop=None, scope=None):
+    s = state(pid) or {}
+    if scope is None and s.get("method") == "targeted":
+        from .targeted import run as targeted_run
+        return targeted_run(pid, spec, progress, stop)
+    if scope is not None and s.get("method") == "targeted":
+        # Targeted investigation is not physical-page coverage. Explicit checking
+        # starts its own checkpoint, retaining the already corrected reading copy.
+        (store.pdir(pid) / "correction-work.json").unlink(missing_ok=True)
+        s.update(method="full", checked=[], done=0)
+        _write(store.pdir(pid), "correction.json", s)
+    return run_full(pid, spec, progress, stop, scope)
+
+
+def run_full(pid, spec, progress=lambda *a: None, stop=None, scope=None):
     s = state(pid)
     if scope is not None:
         if not s:

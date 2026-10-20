@@ -107,7 +107,7 @@ def page(doc, app=False, assets=None, saved=None, pdf=None):
     inline_images(doc, app)
     t = (WEB / "template.html").read_text(encoding='utf-8')
     correction = doc["meta"].get("correction")
-    if correction and correction["status"] != "done":
+    if correction and app:
         status = correction["status"]
         issues = correction.get("issues") or []
         title = ("PDF 校对完成 · 有待核实位置" if issues else "PDF 校对完成") if status == "done" else (
@@ -136,17 +136,26 @@ def page(doc, app=False, assets=None, saved=None, pdf=None):
                            '<label>起始物理页 <input name="position" type="number" min="1" style="width:60px"></label> '
                            '<button type="button" data-scope="chapter">从此处核查最多 30 页</button></p>' if chapters else
                            '<p>无法可靠确定章节页界时，请选择页码范围。</p>') +
-                        '<p><button type="button" data-scope="document">明确核查全文（每批最多 30 页）</button> '
-                        '<button type="button" data-scope="resume">继续已选范围</button></p>'
+                        '<p><button type="button" data-scope="resume">' +
+                        ('继续局部核实' if correction.get('method') == 'targeted' and status != 'awaiting-scope' else '继续已选范围') + '</button></p>'
                         '<p role="status" id="pdf-scope-message"></p></form>')
-        banner = (f'<details aria-label="PDF 校对" style="position:fixed;top:64px;right:16px;z-index:50;'
+        if correction.get("method") == "targeted":
+            title = "局部核实完成 · 未逐页核查全文" if status == "done" else "局部核实未完成 · Full 可立即阅读"
+            coverage = f'已调查疑点 {correction.get("done", 0)} 个。局部核实不代表全文逐页检查。'
+        generation_note = ("本轮局部核实结束后生成阅读层；未决位置保留不确定性。" if correction.get("method") == "targeted" else
+                           "局部摘要仅覆盖已核查内容；范围外依赖来自未核查提取稿。未能定位完整页界的段落须等待其全部页核查。")
+        banner = (f'<div class="document-actions"><button type="button" id="document-menu-button" class="langbtn" '
+                  f'aria-label="文档菜单" aria-expanded="false" aria-controls="document-menu">⋯</button>'
+                  f'<div id="document-menu" hidden style="position:fixed;top:64px;right:16px;z-index:50;'
                   f'box-sizing:border-box;width:min(360px,calc(100% - 32px));max-height:40vh;overflow:auto;padding:8px 12px;border:1px solid #bdb4e6;'
                   f'border-radius:8px;background:var(--surface);color:var(--ink);font:13px/1.5 system-ui">'
-                  f'<summary>{escape(title)}</summary><p>已检查 {correction.get("done", 0)}/{correction.get("total", 0)} 页。'
+                  f'<button type="button" data-scope="document">核查全文</button> '
+                  f'<button type="button" id="pdf-scope-toggle" aria-expanded="false">选择核查范围…</button>'
+                  f'<details><summary>查看校正记录</summary><p>{escape(title)}</p><p>'
                   f'{coverage} 对照原始 PDF 校正；疑点不自动补写。</p>'
-                  f'<p>局部摘要仅覆盖已核查内容；范围外依赖来自未核查提取稿。未能定位完整页界的段落须等待其全部页核查。</p>'
-                  f'{controls}<ul>{detail}</ul></details>')
-        t = t.replace('<main id="doc"', banner + '<main id="doc"')
+                  f'<p>{generation_note}</p>'
+                  f'<ul>{detail}</ul></details><div id="pdf-scope-controls" hidden>{controls}</div></div></div>')
+        t = t.replace('<div class="langpick">', banner + '<div class="langpick">')
     if app:
         head = '<script src="/static/theme.js"></script>' + fonts_head(APP_ASSETS) + '<link rel="stylesheet" href="/static/reader.css"><link rel="stylesheet" href="/static/app.css">'
         scripts = ('<script src="/static/i18n.js"></script><script src="/static/tutorial.js"></script><script src="/static/reader.js"></script>'

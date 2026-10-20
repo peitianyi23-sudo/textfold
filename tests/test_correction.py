@@ -77,7 +77,7 @@ class CorrectionTests(unittest.TestCase):
         self.assertEqual((self.d / "correction-original/source.md").read_text(encoding="utf-8"), self.md)
 
     def test_all_pages_checked_and_edited_page_verified_before_publication(self):
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         def reply(prompt, schema, spec, images, **kwargs):
             if schema is correction.REVIEW:
                 return {"decisions": [{"index": 0, "verdict": "accept", "reason": "PDF shows turbulent"}]}
@@ -99,7 +99,7 @@ class CorrectionTests(unittest.TestCase):
             call.assert_not_called()
 
     def test_provider_failure_is_not_success_and_does_not_publish_draft(self):
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         with patch.object(llm_openai, "vision", side_effect=RuntimeError("provider unavailable")):
             with self.assertRaisesRegex(RuntimeError, "unavailable"):
                 correction.run(PID, SPEC)
@@ -107,7 +107,7 @@ class CorrectionTests(unittest.TestCase):
         self.assertEqual((self.d / "source.md").read_text(encoding="utf-8"), self.md)
 
     def test_parallel_overlap_is_relocated_in_current_context_without_overwriting_reviewed_edit(self):
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         edit = {"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "PDF"}
         def reply(prompt, schema, spec, images, **kwargs):
             if schema is correction.REVIEW:
@@ -124,7 +124,7 @@ class CorrectionTests(unittest.TestCase):
         self.assertIn("A turbulent flow.", (self.d / "source.md").read_text(encoding="utf-8"))
 
     def test_missing_numbered_display_gets_region_restoration_and_independent_review(self):
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         def reply(prompt, schema, spec, images, **kwargs):
             if schema is correction.REVIEW:
                 return {"decisions": [{"index": 0, "verdict": "accept", "reason": "All terms and number match"}]}
@@ -142,7 +142,7 @@ class CorrectionTests(unittest.TestCase):
         self.assertIn("independent-region-review", stages)
 
     def test_resume_skips_completed_pages_and_publishes_only_after_all_pages(self):
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         def reply(prompt, *args, **kwargs):
             if "physical PDF page 1" in prompt:
                 return {"edits": [], "issues": []}
@@ -166,7 +166,7 @@ class CorrectionTests(unittest.TestCase):
         self.assertEqual(issues[0]["verdict"], "reject")
 
     def test_failed_pdf_check_blocks_summary_generation_and_questions(self):
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         with patch.object(correction, "run", side_effect=RuntimeError("image check failed")), patch.object(ladder, "build") as build:
             with self.assertRaisesRegex(RuntimeError, "image check failed"):
                 pipeline.generate(PID, "en", SPEC)

@@ -715,11 +715,40 @@
     }
     const src = PAPER.source || {};
     const scopeForm = document.getElementById('pdf-scope');
+    const documentMenuButton = document.getElementById('document-menu-button');
+    const documentMenu = document.getElementById('document-menu');
+    if (documentMenuButton) {
+      documentMenuButton.onclick = () => {
+        documentMenu.hidden = !documentMenu.hidden;
+        documentMenuButton.setAttribute('aria-expanded', String(!documentMenu.hidden));
+      };
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('.document-actions')) {
+          documentMenu.hidden = true;
+          documentMenuButton.setAttribute('aria-expanded', 'false');
+        }
+      });
+      documentMenuButton.parentElement.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          documentMenu.hidden = true;
+          documentMenuButton.setAttribute('aria-expanded', 'false');
+          documentMenuButton.focus();
+        }
+      });
+    }
     if (scopeForm) {
+      const scopeToggle = document.getElementById('pdf-scope-toggle');
+      scopeToggle.onclick = () => {
+        const controls = document.getElementById('pdf-scope-controls');
+        controls.hidden = !controls.hidden;
+        scopeToggle.setAttribute('aria-expanded', String(!controls.hidden));
+      };
       async function requestScope(kind) {
         const message = document.getElementById('pdf-scope-message');
         try {
           let scope;
+          const targetedResume = kind === 'resume' && PAPER.correction &&
+            PAPER.correction.method === 'targeted' && PAPER.correction.status !== 'awaiting-scope';
           if (kind === 'range') {
             const ranges = scopeForm.elements.ranges.value.split(',').map((part) => {
               const m = part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
@@ -737,18 +766,20 @@
             const readingPage = pages && pages.find((p) => chapterPages.includes(p));
             scope = { kind, chapter, position: +scopeForm.elements.position.value || readingPage || undefined };
           } else if (kind === 'document') scope = { kind };
-          else scope = PAPER.correction && (PAPER.correction.requested_scope || PAPER.correction.scope);
-          if (!scope) throw new Error('请先选择核查范围');
+          else if (!targetedResume) scope = PAPER.correction && (PAPER.correction.requested_scope || PAPER.correction.scope);
+          if (!scope && !targetedResume) throw new Error('请先选择核查范围');
           // Persisted scopes carry canonical pages; explicit requests use the public form.
-          if (scope.pages) scope = { kind: 'range', ranges: scope.pages.map((p) => [p, p]) };
+          if (scope && scope.pages) scope = { kind: 'range', ranges: scope.pages.map((p) => [p, p]) };
           const lang = (window.__reader && window.__reader.lang) || 'en';
           const result = await api('/api/correction', { paper: PAPER.id, lang, scope });
           message.textContent = '已请求核查；已完成结果会保留。';
+          documentMenu.hidden = true;
+          documentMenuButton.setAttribute('aria-expanded', 'false');
           watch(result.job, toastFor(lang));
         } catch (e) { message.textContent = e.message; }
       }
       scopeForm.onsubmit = (e) => { e.preventDefault(); requestScope('range'); };
-      scopeForm.querySelectorAll('[data-scope]').forEach((b) => { b.onclick = () => requestScope(b.dataset.scope); });
+      documentMenu.querySelectorAll('[data-scope]').forEach((b) => { b.onclick = () => requestScope(b.dataset.scope); });
     }
     if (src.engine !== 'llm-for-zotero' && ((src.kind === 'pdf' && src.tier !== 'accurate') || (src.kind === 'file' && src.tier === 'fast'))) {
       const acc = h('button', 'cmpbtn accbtn');

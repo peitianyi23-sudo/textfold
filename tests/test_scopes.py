@@ -34,9 +34,10 @@ class ScopeTests(unittest.TestCase):
             self.assertEqual(s["total"], count)
             self.assertEqual(s["status"], "queued" if count == 30 else "awaiting-scope")
             if count > 30:
-                with patch.object(llm_openai, "vision") as vision, patch.object(ladder, "build") as build:
+                with patch.object(llm_openai, "vision") as vision, patch.object(llm, "call") as screen, patch.object(ladder, "build") as build:
                     pipeline.generate(PID, "en", SPEC)
                 vision.assert_not_called()
+                screen.assert_not_called()
                 build.assert_not_called()
 
     def test_chapter_from_reading_position_is_capped_and_not_marked_complete(self):
@@ -49,7 +50,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_noncontiguous_ranges_preserve_prior_coverage_and_resume_without_rechecking(self):
         self.pdf(100)
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         scope = correction.choose(PID,{"kind":"range","ranges":[[2,3],[80,80]]})
         with patch.object(llm_openai,"vision",return_value={"edits":[],"issues":[]}) as call:
             correction.run(PID,SPEC,scope=scope)
@@ -66,7 +67,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_document_batches_are_at_most_30_and_pipeline_generates_between_batches(self):
         self.pdf(65)
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         checked = []
         def generated(*a,**kw):
             checked.append(len(correction.state(PID)["checked"]))
@@ -80,7 +81,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_stop_discards_unreviewed_reply_keeps_reviewed_work_and_new_scope(self):
         self.pdf(31)
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         stop = threading.Event()
         edit = {"before":"Broken turbuð Þlent flow.","after":"A turbulent flow.","reason":"PDF"}
         def response(prompt,schema,*a, **kwargs):
@@ -166,12 +167,12 @@ class ScopeTests(unittest.TestCase):
 
     def test_native_conversion_waits_for_original_pdf_before_queueing(self):
         (self.d/"source.pdf").unlink()
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         self.assertIsNone(correction.state(PID))
 
     def test_inflight_comparison_is_a_reusable_proposal_until_its_scope_is_reviewed(self):
         self.pdf(31)
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         selected = correction.choose(PID,{"kind":"range","ranges":[[1,1]]})
         stop = threading.Event()
         def reply(*a, **kwargs):
@@ -189,7 +190,7 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(correction.state(PID)["timing"]["reused_comparisons"],[1])
 
     def test_rejected_restoration_does_not_silently_lose_the_missing_display_number(self):
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         proposal = {"before":"Broken turbuð Þlent flow.","after":r"$$T=x \tag{4}$$","reason":"Missing label"}
         def reply(prompt,schema,*a, **kwargs):
             if schema is correction.REVIEW:
@@ -226,7 +227,7 @@ class ScopeTests(unittest.TestCase):
             thread.join()
 
     def test_unrestorable_number_remains_an_explicit_issue_when_no_edit_is_returned(self):
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         def reply(prompt,*a, **kwargs):
             if "physical PDF page 1" in prompt:
                 return {"edits":[],"issues":[],"displays":[{"number":"4","present":False,"box":[0,0,1,1]}]}
@@ -236,7 +237,7 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue(any("Numbered displays still need restoration: 4" in r["text"] for r in correction.state(PID)["issues"]))
 
     def test_next_page_comparison_waits_for_current_page_independent_review(self):
-        correction.queue(PID)
+        correction.queue(PID, method="full")
         next_page = threading.Event()
         reviewed = threading.Event()
         def reply(prompt,schema,*a, **kwargs):

@@ -32,7 +32,16 @@ A region reported by a document extractor.
 An extracted image block can contain a complete figure or only part of one.
 _Avoid_: Figure, unless the block contains the complete figure
 
+**Extraction correction**:
+Restoring extracted text, mathematics and paragraph structure to match the selected original document.
+It is distinct from summarizing, translating or rewriting the author's content.
+_Avoid_: Summary revision
+
 **Correction scope**:
 The content selected for extraction correction: a whole document, a chapter, or a page range.
 Selection does not imply that checking has completed.
 _Avoid_: Checked content
+
+**Targeted correction**:
+Extraction correction that investigates automatically identified suspicious passages against the original document.
+Its completion describes the investigated passages, rather than exhaustive checking of every PDF page.
