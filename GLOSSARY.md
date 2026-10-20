@@ -42,6 +42,15 @@ The content selected for extraction correction: a whole document, a chapter, or 
 Selection does not imply that checking has completed.
 _Avoid_: Checked content
 
+**Source page**:
+A web page contributing original content to a reading document, identified by its source URL.
+
+**Reading document**:
+A library item read as one work, containing an ordered set of chapters drawn from one or more sources.
+
+**Library folder**:
+A grouping of reading documents for organization, distinct from the chapters within a reading document.
+
 **Targeted correction**:
 Extraction correction that investigates automatically identified suspicious passages against the original document.
 Its completion describes the investigated passages, rather than exhaustive checking of every PDF page.

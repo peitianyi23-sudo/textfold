@@ -31,6 +31,9 @@ def system_for(meta):
     """The system prompt for a document: a paper's as it always was; a text's in a text's words (kinds.py)."""
     from . import kinds
     text = kinds.adapt(SYSTEM, meta)
+    if meta.get("reading_mode") == "original":
+        text += (" Keep every generated reading level in the original language of its source passage, including section "
+                 "takeaways and topics. Do not translate. For languages without space-delimited words, use comparably concise lines.")
     if (meta.get("correction") or {}).get("method") == "targeted":
         text += (" Targeted correction investigates suspicious passages only; do not claim exhaustive PDF verification. "
                  "Some repairs use unambiguous document context, without visual PDF comparison; do not describe "

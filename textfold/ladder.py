@@ -84,6 +84,8 @@ def prompt_for(doc, chunk):
     tables = tables_of(doc, chunk)
     context = ("\n\nTables in this section, for context (they are not units; a takeaway may use what they show):\n\n" + "\n\n".join(tables)) if tables else ""
     context += equations.prompt(doc, chunk)
+    original = doc['meta'].get('reading_mode') == 'original'
+    language = 'sentence in this source passage\'s original language' if original else 'English sentence'
     return kinds.adapt(doc['meta'].get('scope_context', '') + f"""Paper: {doc['meta']['title']}
 
 Paper abstract, for context:
@@ -102,9 +104,9 @@ A reader zooms out of this paper level by level: Full, Brief (author sentences),
 
 For each unit:
 - role: the unit's job in the paper's argument, one of: context (background, prior work), gap (what prior work lacks or gets wrong), claim (a thesis or hypothesis the paper puts forward), method (what the authors built or how it works), setup (data, parameters, protocol), result (a measured finding), analysis (an interpretation, mechanism or theory), limitation (a caveat or future work).
-- takeaway: ONE English sentence of at most {BUDGET['takeaway']} words stating what this unit establishes: the claim, design choice, number or finding itself, conclusion first, packed like a headline. Name the thing itself, not the activity ("this paragraph describes", "the authors discuss", "details of"). Keep the paper's own terms. Someone reading only the takeaways of the whole paper in order should be able to follow its argument.
+- takeaway: ONE {language} of at most {BUDGET['takeaway']} words stating what this unit establishes: the claim, design choice, number or finding itself, conclusion first, packed like a headline. Name the thing itself, not the activity ("this paragraph describes", "the authors discuss", "details of"). Keep the paper's own terms. Someone reading only the takeaways of the whole paper in order should be able to follow its argument.
 - topic: the unit's subject as a bare noun phrase of at most {BUDGET['topic']} words, copied VERBATIM from inside the takeaway.
-- reason: ONE more English sentence of at most {BUDGET['reason']} words that reads on from the takeaway and gives its main reason, mechanism, condition or consequence; do not restate the takeaway. Use "" when the unit is a single short sentence.
+- reason: ONE more {language} of at most {BUDGET['reason']} words that reads on from the takeaway and gives its main reason, mechanism, condition or consequence; do not restate the takeaway. Use "" when the unit is a single short sentence.
 - evidence: the numbers of the 1 or 2 sentences (3 only when the unit has 7 or more) whose verbatim text best backs the takeaway, ascending; prefer sentences that state a result, a definition or a decision over sentences that only set up or list.
 
 For the section: takeaway, ONE sentence of at most {BUDGET['section']} words stating what this section establishes in the paper; topic, at most {BUDGET['topic']} words copied verbatim from that takeaway.
