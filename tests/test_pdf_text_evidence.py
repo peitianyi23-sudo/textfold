@@ -22,6 +22,22 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(candidate['page'], 2)
         self.assertEqual(candidate['block'], -1)
 
+    def test_repeated_anchor_on_one_page_is_not_unique_on_another(self):
+        before = '$\\bar{k}^{-3}$'
+        text = 'with periodic boundary conditions ' + before
+        layout = [{'p': 2, 'b': [.5, .4, .9, .5], 't': text}]
+        pages = ['', 'with periodic boundary conditions and with periodic boundary conditions',
+                 '', 'with periodic boundary conditions']
+        candidate = targeted.source_candidate({'before': before, 'reason': 'spurious bar'}, text, layout, pages)
+        self.assertEqual(candidate['page'], 2)
+        self.assertEqual(candidate['block'], 0)
+
+    def test_caption_question_retains_all_legend_entries_and_parentheses(self):
+        caption = '<figcaption>FIG. 4. Legend (<span class="math inline">-- + --</span> for 5000, ' + \
+                  '<span class="math inline">broken</span> for 10000, -- * -- for 20000).</figcaption>'
+        candidate = targeted.candidate_unit('Intro.\n\n' + caption, {'before': 'broken'})
+        self.assertEqual(candidate['before'], caption)
+
     def test_distant_candidates_do_not_include_intervening_document(self):
         text = 'First $x$ passage.\n\n' + 'Unrelated paragraph.\n\n' * 200 + 'Last $y$ passage.'
         context = targeted.candidate_context(text, [{'before': 'First $x$ passage.'},

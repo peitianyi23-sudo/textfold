@@ -34,18 +34,26 @@ TEXT_PROPOSAL['properties']['decisions'] = {'type': 'array', 'items': {
 TEXT_PROPOSAL['required'].append('decisions')
 
 
-def locate(text, anchor):
-    """Unique literal word sequence; offsets retain the PDF's own character geometry."""
+def anchor_spans(text, anchor):
+    """All literal word-sequence hits, including repeated occurrences on a page."""
     words = list(re.finditer(r"\w+", text))
     target = re.findall(r"\w+", anchor.casefold())
     if len(target) < 4:
-        return None
+        return []
     hits = [i for i in range(len(words)-len(target)+1)
             if [m[0].casefold() for m in words[i:i+len(target)]] == target]
-    if len(hits) != 1:
-        return None
-    i = hits[0]
-    return words[i].start(), words[i+len(target)-1].end()
+    return [(words[i].start(), words[i+len(target)-1].end()) for i in hits]
+
+
+def locate(text, anchor):
+    """Unique literal word sequence; offsets retain the PDF's own character geometry."""
+    hits = anchor_spans(text, anchor)
+    return hits[0] if len(hits) == 1 else None
+
+
+def anchor_pages(pages, anchor):
+    # Do not discard repeated hits on one page and call another page unique.
+    return [p+1 for p, content in enumerate(pages) for _ in anchor_spans(content, anchor)]
 
 
 def missing_footnotes(text):
@@ -146,7 +154,7 @@ def source_candidate(edit, text, layout, pages):
     anchors += [' '.join(nearby[i:i+4]) for i in range(len(nearby)-3)]
     location = None
     for anchor in anchors:
-        found = [p+1 for p, content in enumerate(pages) if locate(content, anchor) is not None]
+        found = anchor_pages(pages, anchor)
         if len(found) == 1:
             location = (found[0], anchor)
             break
@@ -231,11 +239,14 @@ def candidate_context(text, candidates):
 
 
 def candidate_unit(text, candidate):
-    """Investigate the whole formula containing a small damaged token."""
+    """Keep the complete caption/list or formula containing a damaged token."""
     before = candidate['before']
     if not before or text.count(before) != 1:
         return candidate
     at = text.index(before)
+    for match in re.finditer(r'<figcaption\b[^>]*>.*?</figcaption>', text, re.S):
+        if match.start() <= at and at+len(before) <= match.end():
+            return dict(candidate, before=match[0])
     pattern = r'<span class="math (?:inline|display)">.*?</span>|\$\$.*?\$\$|(?<!\\)\$(?!\$)[^\n$]+(?<!\\)\$'
     for match in re.finditer(pattern, text, re.S):
         if match.start() <= at and at+len(before) <= match.end():
@@ -717,7 +728,7 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                     if localized:
                         candidate.update(page=localized['page'], block=localized['block'], anchor=localized['anchor'])
                 if candidate.get("anchor"):
-                    found = [p+1 for p, source in enumerate(pages) if locate(source, candidate["anchor"]) is not None]
+                    found = anchor_pages(pages, candidate["anchor"])
                     if len(found) == 1 and found[0] != candidate["page"]:
                         candidate.update(page=found[0], block=-1)
             unique = {}
