@@ -107,6 +107,9 @@ def page(doc, app=False, assets=None, saved=None, pdf=None):
     inline_images(doc, app)
     t = (WEB / "template.html").read_text(encoding='utf-8')
     correction = doc["meta"].get("correction")
+    if not correction and app and (doc["meta"].get("source") or {}).get("kind") == "pdf":
+        # Existing reading copies enroll only when the reader explicitly asks.
+        correction = {"status": "not-started"}
     if correction and app:
         status = correction["status"]
         issues = correction.get("issues") or []
@@ -114,7 +117,12 @@ def page(doc, app=False, assets=None, saved=None, pdf=None):
             "PDF 校对未完成 · 当前为提取稿" if status in ("error", "stopped") else
             "请选择 PDF 核查范围 · 当前为提取稿" if status == "awaiting-scope" else
             "所选范围校对完成 · 全文尚未完成" if status == "scope-done" else "PDF 校对中 · 当前为提取稿")
+        if status == "not-started":
+            title = "PDF 尚未核实"
         detail = "".join("<li>" + escape(x["text"]) + "</li>" for x in issues)
+        if correction.get("screen_notes"):
+            detail += '<li>文本筛查观察（未经 PDF 核实）<ul>' + ''.join(
+                '<li>' + escape(x) + '</li>' for x in correction['screen_notes']) + '</ul></li>'
         if correction.get("error"):
             detail += "<li>" + escape(correction["error"]) + "</li>"
         checked = correction.get("checked", list(range(1, correction.get("total", 0) + 1)) if status == "done" else [])

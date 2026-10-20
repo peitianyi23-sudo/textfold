@@ -29,6 +29,12 @@ def locate(text, anchor):
     return words[i].start(), words[i+len(target)-1].end()
 
 
+def missing_footnotes(text):
+    refs = set(re.findall(r"\[\^([^\]\n]+)\](?!:)", text))
+    definitions = set(re.findall(r"(?m)^ {0,3}\[\^([^\]\n]+)\]:", text))
+    return refs - definitions
+
+
 def crops(pdf, page, anchors):
     """Locate exact source regions and merge overlapping column-context crops."""
     from .engine import PDFIUM
@@ -170,7 +176,9 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                 for candidate in result["candidates"]:
                     if candidate not in candidates:
                         candidates.append(candidate)
-                work["issues"].extend({"page": 0, "text": x} for x in result["issues"])
+                # Text-only notes can describe an earlier batch boundary, even
+                # after later PDF evidence resolves it. They are not PDF findings.
+                work.setdefault("screen_notes", []).extend(result["issues"])
             work["candidates"] = candidates
             if any(not p.strip() for p in pages):
                 work["issues"].append({"page": 0, "text": "Some pages lack PDF text; targeted localization/omission detection is limited. Explicit full checking remains available."})
@@ -231,6 +239,7 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                     if sorted(x["index"] for x in decisions) != list(range(len(edits))):
                         raise RuntimeError("Independent review omitted an edit decision")
                     accepted = []
+                    blocked = []
                     for decision in decisions:
                         edit = edits[decision["index"]]
                         if decision["verdict"] == "accept":
@@ -239,17 +248,36 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                             work["issues"].append({"page": page, "text": decision["reason"]})
                     if accepted:
                         text = c.patches(work["text"], accepted)
+                        dangling = missing_footnotes(text) - missing_footnotes(work["text"])
+                        if dangling:
+                            # A marker and its definition may receive different
+                            # review verdicts. Do not publish half that repair.
+                            blocked = [e for e in accepted if missing_footnotes(
+                                c.patches(work["text"], [e])) & dangling]
+                            accepted = [e for e in accepted if e not in blocked]
+                            text = c.patches(work["text"], accepted)
+                            work["issues"].append({"page": page, "text":
+                                "Unresolved footnote dependency; proposed edit retained as a proposal only: " +
+                                ", ".join(sorted(dangling))})
                         c.render(text, c._images((d/"source.md").read_text(encoding="utf-8"),
                                                (d/"source.html").read_text(encoding="utf-8")))
                         work["text"] = text
-                    work["history"].append({"page": page, "edits": accepted, "proposed": edits, "decisions": decisions})
+                    work["history"].append({"page": page, "edits": accepted, "proposed": edits,
+                                            "decisions": decisions, "publication_rejected": blocked})
+                # A label in a rejected proposal is not a restored label. Keep
+                # the local PDF inventory explicit for downstream uncertainty.
+                for display in result.get("displays", []):
+                    number = display["number"]
+                    if not display["present"] and not re.search(
+                            r"\\tag\*?\s*\{\s*" + re.escape(number) + r"\s*\}", work["text"]):
+                        work["issues"].append({"page": page, "text": "Printed display label still unresolved: " + number})
             work["completed"].append(index)
             c._write(d, wf.name, work)
         check()
         c.publish(pid, work["text"], s)
         s.update(status="done", checked=[], done=sum(len(g) for i, g in enumerate(groups.values()) if i in work["completed"]), candidates=len(work["candidates"]),
                  issues=work["issues"], model=spec["id"], edits=sum(len(h["edits"]) for h in work["history"]),
-                 finished=store.stamp())
+                 screen_notes=work.get("screen_notes", []), finished=store.stamp())
     except Exception as e:
         s.update(status="stopped" if isinstance(e, llm.Stopped) else "error", error=str(e))
         raise

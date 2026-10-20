@@ -197,6 +197,10 @@ def prompt(doc, note, question, lang, earlier=(), ui=None):
     uncertainty = ("Unresolved PDF comparison issues (do not silently infer their missing content): " +
                    json.dumps(issues, ensure_ascii=False) + "\n") if issues else ""
     coverage = doc["meta"].get("correction") or {}
+    if coverage.get("screen_notes"):
+        uncertainty += ("Unverified text-screen observations, not PDF findings; disregard generic batch-boundary "
+                        "cautions or concerns resolved in the current source: " +
+                        json.dumps(coverage["screen_notes"], ensure_ascii=False) + "\n")
     if coverage.get("method") == "targeted":
         uncertainty += "Targeted correction investigates suspicious passages only, not exhaustive PDF verification.\n"
     if coverage and coverage.get("status") != "done":

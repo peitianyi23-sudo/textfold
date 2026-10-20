@@ -37,6 +37,11 @@ def system_for(meta):
     if issues:
         text += (" The PDF comparison left these source regions unresolved. Preserve relevant uncertainty in derived "
                  "content; do not silently fill in missing symbols or words: " + json.dumps(issues, ensure_ascii=False))
+    observations = (meta.get("correction") or {}).get("screen_notes")
+    if observations:
+        text += (" Unverified text-screen observations, not PDF-backed findings. Some refer to an earlier batch's "
+                 "context boundary or a concern resolved by the current source; do not repeat generic cautions as "
+                 "source errors. Retain only materially relevant uncertainty: " + json.dumps(observations, ensure_ascii=False))
     return text
 
 

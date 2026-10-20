@@ -150,3 +150,43 @@ class TargetedTests(unittest.TestCase):
         self.assertEqual(correction.state(PID)["status"], "done")
         self.assertTrue(correction.state(PID)["issues"])
         self.assertIn("A turbulent flow.", (self.d/"source.md").read_text(encoding="utf-8"))
+
+    def test_rejected_restoration_keeps_missing_label_explicit(self):
+        correction.queue(PID)
+        result = {"edits": [{"before": "Broken turbuð Þlent flow.",
+                  "after": "A formula $x=y\\tag{1}$.", "reason": "restore display"}],
+                  "issues": [], "displays": [{"number": "1", "present": False, "box": [0, 0, 1, 1]}]}
+        with patch.object(llm, "call", return_value=self.screen()), \
+             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"crop"], anchors)), \
+             patch.object(llm_openai, "vision", side_effect=[result, {"decisions": [
+                 {"index": 0, "verdict": "reject", "reason": "wrong printed variable in proposed formula"}]}]):
+            correction.run(PID, SPEC)
+        self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), self.md)
+        self.assertTrue(any("1" in issue["text"] for issue in correction.state(PID)["issues"]))
+
+    def test_partial_review_cannot_publish_a_new_dangling_footnote(self):
+        correction.queue(PID)
+        result = {"edits": [
+            {"before": "Broken turbuð Þlent flow.", "after": "Corrected turbulent flow[^1].", "reason": "printed marker"},
+            {"before": "A healthy paragraph with $x+y$.", "after": "A healthy paragraph with $x+y$.\n\n[^1]: Printed note.", "reason": "restore footnote"},
+            {"before": "# Method", "after": "# Method result", "reason": "printed heading"}], "issues": [], "displays": []}
+        decisions = [{"index": i, "verdict": "reject" if i == 1 else "accept", "reason": "visible"} for i in range(3)]
+        with patch.object(llm, "call", return_value=self.screen()), \
+             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"crop"], anchors)), \
+             patch.object(llm_openai, "vision", side_effect=[result, {"decisions": decisions}]):
+            correction.run(PID, SPEC)
+        self.assertNotIn('[^1]', (self.d/'source.html').read_text(encoding='utf-8'))
+        self.assertIn('# Method result', (self.d/'source.md').read_text(encoding='utf-8'))
+        self.assertTrue(any('footnote' in issue['text'] for issue in correction.state(PID)['issues']))
+
+    def test_screen_observations_are_not_asserted_as_unresolved_pdf_findings(self):
+        correction.queue(PID)
+        response = self.screen()
+        observation = 'Candidates need image verification; this text batch ends here.'
+        response[0]['out']['issues'] = [observation]
+        with patch.object(llm, 'call', return_value=response), patch.object(targeted, 'crops', return_value=([], [])):
+            correction.run(PID, SPEC)
+        state = correction.state(PID)
+        self.assertEqual(state['screen_notes'], [observation])
+        self.assertFalse(any(observation in issue['text'] for issue in state['issues']))
+        self.assertTrue(any('source location' in issue['text'] for issue in state['issues']))
