@@ -50,6 +50,7 @@
   const figOf = new Map();                // caption uid -> figure element
   const bareFigs = [];                    // figures without a caption follow the global level
   const lvBlocks = [];                    // blocks that show or hide by level: equations, raw blocks, title-page leftovers, bare figures
+  const passageOf = new Map();            // a paragraph and its following display mathematics open together
   const chunkOf = {};                     // uid -> chunk
   const headEls = [];                     // [chunk, heading element, stake element]
   D.chunks.forEach((c) => c.units.forEach((uid) => { chunkOf[uid] = c; }));
@@ -154,7 +155,8 @@
   // 150 pages); as text it costs what an ordinary article costs, and only what is on screen pays for motion.
   function renderUnit(uid, hot = true) {
     const L = levelOf(uid), el = unitEl.get(uid);
-    el.classList.toggle('local-open', localLevel.has(uid) && L > level);
+    const passage = passageOf.get(uid), open = localLevel.has(uid) && L > level;
+    (passage || el).classList.toggle('local-open', open);
     // Full/Brief already show the author paragraphs, and Topic hides formulas.
     // Do not lay out duplicate caption tokens at those global levels.
     if (el.classList.contains('eq-caption') && (level >= 3 || level === 0)) {
@@ -378,6 +380,21 @@
       bib.append(h('summary'), h('div', null, D.bib));
       docEl.append(bib);
     }
+    // Display math is a separate source block. Keep its normal global selection,
+    // but reveal it with the preceding paragraph when that source passage opens.
+    // A new paragraph, heading, figure, list or raw block ends the passage.
+    for (const equation of docEl.querySelectorAll('.eq')) {
+      const previous = equation.previousElementSibling;
+      let passage = previous && previous.classList.contains('passage') ? previous : null;
+      if (!passage && previous && previous.matches('.u.para')) {
+        passage = h('div', 'passage'); passage._equations = [];
+        previous.before(passage); passage.append(previous);
+        passageOf.set(previous.dataset.u, passage);
+      }
+      if (!passage) continue;
+      equation._owner = passage.firstElementChild.dataset.u;
+      passage._equations.push(equation); passage.append(equation);
+    }
     for (const uid of unitEl.keys()) sideNode(uid);
     let lastPos = 0;   // a block sits where the unit before it sits
     for (const el of docEl.querySelectorAll('.u, .eq, .raw, .front, figure.fig')) {
@@ -469,7 +486,7 @@
   let staleQ = [];
   const order = new Map();   // uid -> position in the paper
   const drawBlock = (x) => {
-    x.dataset.l = level; x._stale = false;
+    x.dataset.l = x._owner ? levelOf(x._owner) : level; x._stale = false;
   };
   const redraw = (x) => { if (typeof x === 'string') renderUnit(x, false); else drawBlock(x); };
   const elOf = (x) => (typeof x === 'string' ? unitEl.get(x) : x);
@@ -978,7 +995,8 @@
       const r = u.getBoundingClientRect();
       if (!inRange(r)) continue;
       U.set(uid, rectOf(r));
-      deco(u, `d:u:${uid}`, uid, `u|${u.className}`);
+      const card = u.parentElement.matches('.passage.local-open') ? u.parentElement : u;
+      deco(card, `d:u:${uid}`, uid, `u|${card.className}`);
       for (const el of u.querySelectorAll('[data-id]')) piece(el, el.dataset.id, uid, el.classList.contains('dot') ? 'b' : 't', u.className);
     }
     for (const sec of root.querySelectorAll('section.chunk')) deco(sec, `d:c:${sec.id}`, `h:${sec.id}`, `c|${sec.className}`);
@@ -1477,6 +1495,8 @@
     morph(() => {
       if (localLevel.has(uid)) localLevel.delete(uid); else localLevel.set(uid, 4);
       renderUnit(uid, true);
+      const passage = passageOf.get(uid);
+      if (passage) for (const equation of passage._equations) drawBlock(equation);
     }, { el, y: r.top, frac: 0 });
   }
 
@@ -3446,7 +3466,7 @@ math { font-size: 1.05em; }
     if (e.target.closest('a, details, summary')) return;
     if (level === 4 && !localLevel.size) return;
     if (String(getSelection()).length) return;
-    const el = e.target.closest('.u');
+    const el = e.target.closest('.u') || e.target.closest('.passage.local-open')?.querySelector(':scope > .u');
     if (!el || !el.dataset.u) return;
     if (level === 0 && !localLevel.size) {
       const r = el.getBoundingClientRect();

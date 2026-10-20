@@ -151,6 +151,13 @@ keys `1`–`5` jump to a level, `-`/`=` step, `L` cycles languages, clicking a p
 the reader is still, the screen is laid out at each level ahead of time (in a hidden copy, one level per idle moment),
 and a zoom plays those keyframes; the page takes over again at rest.
 
+A paragraph's local expansion includes its immediately following display equations in the same original-text card.
+The next paragraph, heading, figure, list, raw block or enclosing-container boundary ends that passage. Equations
+remain separate source blocks with their original HTML and importance decisions; only their displayed level follows
+the opened paragraph. Second click (including on the revealed formula), Escape and global zoom restore the compact
+view. Collapsed passage containers use `display: contents`, preserving the ordinary five-level layout and equation
+selection. The zoom sandbox closes local cards and lays out equation blocks at its target global level as before.
+
 Notes: select text anywhere (a paragraph at any level, a section's summary or its title) to highlight it, write a note,
 or ask the model about it (the answer, in the reading language, cites the paragraphs it rests on; a cite opens that
 paragraph to its full text in place). The reader's own notes sit in the left margin, the conversations with the model

@@ -63,6 +63,9 @@ with their placement or a readable image of the relevant passage. Faulty charact
 A mathematical relation whose omission would lose a necessary definition, central result, or governing mechanism of the document's argument.
 An intermediate derivation step or familiar definition is not essential solely because it is expressed as an equation.
 
+**Local expansion**:
+An in-place view of a passage in the author's original words, including its display mathematics, while the rest of the document retains the chosen reading level.
+
 **Source page**:
 A web page contributing original content to a reading document, identified by its source URL.
 
