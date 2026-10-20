@@ -141,6 +141,34 @@ class PipelineEvidenceTests(unittest.TestCase):
         self.assertIn('"candidate": 1', prompt)
         self.assertIn('"candidates": [1]', prompt)
 
+    def test_later_image_failure_resumes_only_unresolved_question(self):
+        screen = {'candidates': [
+            {'before': 'Broken turbuð Þlent flow.', 'page': 1, 'anchor': '', 'reason': 'word'},
+            {'before': 'A healthy paragraph with $x+y$.', 'page': 2, 'anchor': '', 'reason': 'symbol'}],
+            'edits': [], 'issues': []}
+        native = [dict(candidate=i, page=i+1, readable=True, box=[10, 10, 200, 50], runs=[
+            dict(text='printed', x=10, y=20, size=10, unmapped=False)]) for i in range(2)]
+        result = {'edits': [{'before': 'Broken turbuð Þlent flow.', 'after': 'The turbulent flow.',
+                  'reason': 'literal', 'candidate': 0, 'page': 1}], 'issues': [], 'displays': [],
+                  'decisions': [dict(candidate=0, verdict='corrected', reason='word'),
+                                dict(candidate=1, verdict='unresolved', reason='needs image')]}
+        correction.queue(fixtures.PID)
+        with patch.object(targeted, 'text_evidence', return_value=native), \
+                patch.object(llm, 'call', side_effect=[({'out': screen}, False), ({'out': result}, False)]), \
+                patch.object(llm_openai, 'vision', side_effect=RuntimeError('provider')):
+            with self.assertRaisesRegex(RuntimeError, 'provider'):
+                correction.run(fixtures.PID, fixtures.SPEC)
+        done = {'edits': [], 'issues': [], 'displays': [], 'decisions': [
+            dict(candidate=1, verdict='correct', reason='printed original')]}
+        with patch.object(llm, 'call') as call, \
+                patch.object(llm_openai, 'vision', return_value=done) as vision:
+            correction.run(fixtures.PID, fixtures.SPEC)
+        call.assert_not_called()
+        self.assertEqual(vision.call_count, 1)
+        self.assertIn('"candidates": [1]', vision.call_args.args[0])
+        self.assertIn('The turbulent flow.', (self.d/'source.md').read_text(encoding='utf-8'))
+        self.assertEqual(correction.state(fixtures.PID)['edits'], 1)
+
     def test_pdf_text_stage_keeps_caption_relocation_atomic(self):
         text = self.md + '\nFIG. 1. Complete caption.\n'
         work = {'text': text, 'issues': []}

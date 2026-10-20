@@ -754,7 +754,10 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
             check()
             if index in work['completed']:
                 continue
-            pending = group
+            finished = work.setdefault('source_finished', [])
+            followups = work.setdefault('source_followups', [])
+            pending = [dict(x, image_required=True) if x['id'] in followups else x
+                       for x in group if x['id'] not in finished]
             # One initial decision, then only the questions it explicitly could not read.
             while pending:
                 needs_image = [x for x in pending if x.get('image_required') or not any(
@@ -780,7 +783,11 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                         if candidate not in questions:
                             work['issues'].append({'page': candidate['page'], 'text':
                                 'Unresolved exact source location: ' + candidate['reason']})
+                    for candidate in batch:
+                        if candidate not in questions and candidate['id'] not in finished:
+                            finished.append(candidate['id'])
                     if not questions:
+                        c._write(d, wf.name, work)
                         continue
                     source_runs = [{'candidate': e['candidate'], 'page': e['page'],
                         'runs': [[r['text'], r['x'], r['y'], r['size'], r['unmapped']] for r in e['runs']]}
@@ -851,12 +858,18 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                             decision['verdict'] == 'corrected' and any(e['candidate'] == cid for e in accepted)
                             and not any(e['candidate'] == cid for e in blocked))
                         if complete:
-                            continue
-                        if candidate in readable:
+                            finished.append(cid)
+                        elif candidate in readable:
                             followup.append(dict(candidate, image_required=True))
+                            if cid not in followups:
+                                followups.append(cid)
                         else:
+                            finished.append(cid)
                             work['issues'].append({'page': candidate['page'], 'text':
                                 'Unresolved source question: ' + decision['reason']})
+                    # Later image batches/followups may fail. Retain completed
+                    # decisions and the exact remaining questions before waiting.
+                    c._write(d, wf.name, work)
                 pending = followup
             work['completed'].append(index)
             c._write(d, wf.name, work)
