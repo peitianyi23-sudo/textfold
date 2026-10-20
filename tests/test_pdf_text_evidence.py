@@ -46,6 +46,30 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn('First $x$', context)
         self.assertIn('Last $y$', context)
 
+    def test_omitted_prefix_blocks_retain_complete_title_and_author_evidence(self):
+        import tempfile
+        from pathlib import Path
+        from reportlab.pdfgen import canvas
+        import pypdfium2 as pdfium
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'source.pdf'
+            cv = canvas.Canvas(str(path), pagesize=(600, 800))
+            cv.drawString(60, 740, 'The Complete Original Title')
+            cv.drawString(60, 690, 'A. Author and B. Author')
+            cv.drawString(60, 640, 'Department of Physics at Example University')
+            cv.save()
+            layout = [
+                {'p': 1, 'b': [.1, .06, .9, .09], 't': 'The Complete Original Title'},
+                {'p': 1, 'b': [.1, .12, .9, .15], 't': 'A. Author and B. Author'},
+                {'p': 1, 'b': [.1, .18, .9, .21], 't': 'Department of Physics at Example University'}]
+            candidate = dict(id=0, page=1, block=2, anchor='', before=layout[2]['t'], source_blocks=[0, 1, 2])
+            with pdfium.PdfDocument(str(path)) as pdf:
+                evidence = targeted.text_evidence(pdf, [candidate], layout)
+            literal = ''.join(r['text'] for r in evidence[0]['runs'])
+            self.assertIn('The Complete Original Title', literal)
+            self.assertIn('A. Author and B. Author', literal)
+            self.assertGreater(evidence[0]['box'][3], 740)
+
     def test_native_character_placement_is_retained_without_image_render(self):
         import tempfile
         from pathlib import Path

@@ -169,6 +169,22 @@ def source_candidate(edit, text, layout, pages):
     return None
 
 
+def source_blocks(candidate, text, layout):
+    """Include a contiguous omitted prefix before the retained insertion anchor."""
+    block = candidate.get('block', -1)
+    if not 0 <= block < len(layout) or layout[block]['p'] != candidate['page']:
+        return []
+    start = block
+    extracted = compact(text)
+    while start:
+        previous = layout[start-1]
+        if (previous['p'] != candidate['page'] or len(previous['b']) != 4 or
+                not previous['t'].strip() or compact(previous['t']) in extracted):
+            break
+        start -= 1
+    return list(range(start, block+1)) if start < block else []
+
+
 def reference_cues(edits, pages):
     """Bounded PDF text retrieval helps review a newly restored bibliography prefix."""
     cues = []
@@ -330,6 +346,17 @@ def text_evidence(pdf, candidates, layout):
                                            (1-box[3])*h-12 <= y <= (1-box[1])*h+12
                                            for _, x, y, _, _ in chars[line.start():line.end()]):
                                         selected.add(n)
+                    context = [layout[i]['b'] for i in candidate.get('source_blocks', [])
+                               if 0 <= i < len(layout) and layout[i]['p'] == page and len(layout[i]['b']) == 4]
+                    if len(context) > 1:
+                        # An omission's retained anchor does not contain the missing
+                        # title/author/formula. Include those source blocks explicitly.
+                        x0, y0 = min(b[0] for b in context), min(b[1] for b in context)
+                        x1, y1 = max(b[2] for b in context), max(b[3] for b in context)
+                        for n, line in enumerate(lines):
+                            if any(x0*w-8 <= x <= x1*w+8 and (1-y1)*h-12 <= y <= (1-y0)*h+12
+                                   for _, x, y, _, _ in chars[line.start():line.end()]):
+                                selected.add(n)
                     runs, readable, rects = [], True, []
                     for n in sorted(selected):
                         line = lines[n]
@@ -493,6 +520,17 @@ def evidence(pdf, candidates, text, layout, total, native=()):
         if not (1 <= page <= total and before and text.count(before) == 1):
             continue
         block = candidate.get("block", -1)
+        context = [layout[i] for i in candidate.get('source_blocks', [])
+                   if 0 <= i < len(layout) and layout[i]['p'] == page and len(layout[i]['b']) == 4]
+        if len(context) > 1:
+            box = [min(x['b'][0] for x in context), min(x['b'][1] for x in context),
+                   max(x['b'][2] for x in context), max(x['b'][3] for x in context)]
+            images.append(block_crop(pdf, {'p': page, 'b': box,
+                't': '\n'.join(x['t'] for x in context)}, layout))
+            attribution.append({'image': len(images), 'page': page, 'candidates': [candidate['id']],
+                                'source_blocks': candidate['source_blocks']})
+            located.append(candidate)
+            continue
         region = next((x for x in native if x['candidate'] == candidate.get('id')), None)
         if region and len(before) < 400 and not re.search(r'\\(?:tag|begin)\b', before):
             from .engine import PDFIUM
@@ -731,6 +769,11 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                     found = anchor_pages(pages, candidate["anchor"])
                     if len(found) == 1 and found[0] != candidate["page"]:
                         candidate.update(page=found[0], block=-1)
+            original = (d/'source.md').read_text(encoding='utf-8')
+            for candidate in candidates:
+                context = source_blocks(candidate, original, layout)
+                if context:
+                    candidate['source_blocks'] = context
             unique = {}
             for candidate in candidates:
                 key = (candidate['page'], candidate['before'])
