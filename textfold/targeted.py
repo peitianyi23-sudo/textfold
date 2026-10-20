@@ -341,9 +341,23 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                 work.setdefault("screen_notes", []).extend(result["issues"])
             work["candidates"] = [dict(x, id=i) for i, x in enumerate(candidates)]
             c._write(d, wf.name, work)
+        for i, candidate in enumerate(work["candidates"]):
+            candidate.setdefault("id", i)
         if "batches" not in work:
-            # Retain candidate identities through stop/resume and across pages.
-            work["batches"] = evidence_batches(pdf, work["candidates"], work["text"], layout, total, metrics)
+            pending = work["candidates"]
+            previous = []
+            if work["completed"]:
+                # Deployed records indexed completed page groups. Keep those
+                # indexes and their reviewed text; batch only the unfinished work.
+                by_page = {}
+                for candidate in work["candidates"]:
+                    by_page.setdefault(candidate["page"], []).append(candidate)
+                pending = []
+                for i, group in enumerate(by_page.values()):
+                    previous.append(group if i in work["completed"] else [])
+                    if i not in work["completed"]:
+                        pending.extend(group)
+            work["batches"] = previous + evidence_batches(pdf, pending, work["text"], layout, total, metrics)
             c._write(d, wf.name, work)
         groups = work["batches"]
         for index, group in enumerate(groups):

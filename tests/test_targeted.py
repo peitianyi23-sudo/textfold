@@ -294,3 +294,27 @@ class TargetedTests(unittest.TestCase):
         self.assertEqual(located, [candidate])
         with Image.open(io.BytesIO(images[0])) as image:
             self.assertGreater(image.width, 1200)
+
+
+    def test_old_page_group_completion_does_not_skip_remaining_batched_candidates(self):
+        import json
+        correction.queue(PID)
+        first = {"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "printed"}
+        second = {"before": "A healthy paragraph with $x+y$.", "after": "A healthy paragraph with $x-y$.", "reason": "printed"}
+        candidates = [self.screen()[0]["out"]["candidates"][0],
+                      {"before": second["before"], "anchor": "The second physical page", "page": 2, "reason": "math"}]
+        # This is the deployed version's saved record: completed indexes refer to page groups.
+        old = {"text": correction.patches(self.md, [first]), "candidates": candidates,
+               "history": [{"page": 1, "edits": [first]}], "issues": [], "completed": [0]}
+        (self.d/"targeted-work.json").write_text(json.dumps(old), encoding="utf-8")
+        with patch.object(llm, "call") as screen, \
+             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"page2"], anchors)), \
+             patch.object(llm_openai, "vision", side_effect=[{"edits": [second], "issues": []},
+                 {"decisions": [{"index": 0, "verdict": "accept", "reason": "visible minus"}]}]) as vision:
+            correction.run(PID, SPEC)
+        screen.assert_not_called()
+        self.assertEqual(vision.call_count, 2)
+        source = (self.d/"source.md").read_text(encoding="utf-8")
+        self.assertIn(first["after"], source)
+        self.assertIn(second["after"], source)
+        self.assertEqual(correction.state(PID)["done"], 2)
