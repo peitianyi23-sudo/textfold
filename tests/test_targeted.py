@@ -18,31 +18,32 @@ class TargetedTests(unittest.TestCase):
                 "anchor": "The original turbulent flow", "page": 1, "reason": "broken prose"}],
                 "issues": []}}, False
 
+    def source_result(self, edits=(), verdict='correct', candidates=(0,)):
+        return {'edits': [dict(e, candidate=e.get('candidate', 0), page=e.get('page', 1)) for e in edits],
+                'issues': [], 'displays': [], 'decisions': [
+                    {'candidate': cid, 'verdict': verdict if cid == 0 else 'correct', 'reason': 'literal original'}
+                    for cid in candidates]}
+
     def test_default_is_text_first_and_not_exhaustive_coverage(self):
         correction.queue(PID)
-        edit = {"before": "Broken turbuð Þlent flow.", "after": "The turbulent flow.", "reason": "printed"}
-        replies = [{"edits": [edit], "issues": []}, {"decisions": [
-            {"index": 0, "verdict": "accept", "reason": "printed turbulent"}]}]
-        with patch.object(llm, "call", return_value=self.screen()) as screen, \
-             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"local-image"], anchors)) as crop, \
-             patch.object(llm_openai, "vision", side_effect=replies) as vision:
+        edit = {'before': 'Broken turbuð Þlent flow.', 'after': 'The turbulent flow.', 'reason': 'printed'}
+        with patch.object(llm, 'call', return_value=self.screen()) as screen, \
+             patch.object(targeted, 'crops', side_effect=lambda pdf, page, anchors: ([b'local-image'], anchors)), \
+             patch.object(llm_openai, 'vision', return_value=self.source_result([edit], 'corrected')) as vision:
             correction.run(PID, SPEC)
         self.assertEqual(screen.call_count, 1)
-        self.assertEqual(vision.call_count, 2)
-        self.assertEqual(crop.call_args.args[1:], (1, ["The original turbulent flow"]))
-        self.assertEqual(correction.state(PID)["checked"], [])
-        self.assertEqual(correction.state(PID)["status"], "done")
-        self.assertIn("The turbulent flow.", (self.d/"source.md").read_text(encoding="utf-8"))
+        self.assertEqual(vision.call_count, 1)
+        self.assertEqual(correction.state(PID)['checked'], [])
+        self.assertEqual(correction.state(PID)['status'], 'done')
+        self.assertIn('The turbulent flow.', (self.d/'source.md').read_text(encoding='utf-8'))
 
-    def test_independent_rejection_keeps_author_source(self):
+    def test_source_correct_verdict_keeps_author_source(self):
         correction.queue(PID)
-        with patch.object(llm, "call", return_value=self.screen()), \
-             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"crop"], anchors)), \
-             patch.object(llm_openai, "vision", side_effect=[{"edits": [{
-                 "before": "Broken turbuð Þlent flow.", "after": "Plausible rewrite.", "reason": "physics"}],
-                 "issues": []}, {"decisions": [{"index": 0, "verdict": "reject", "reason": "printed v, not u"}]}]):
+        with patch.object(llm, 'call', return_value=self.screen()), \
+             patch.object(targeted, 'crops', side_effect=lambda pdf, page, anchors: ([b'crop'], anchors)), \
+             patch.object(llm_openai, 'vision', return_value=self.source_result()):
             correction.run(PID, SPEC)
-        self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), self.md)
+        self.assertEqual((self.d/'source.md').read_text(encoding='utf-8'), self.md)
 
     def test_unlocated_candidate_never_triggers_full_image_or_edit(self):
         correction.queue(PID)
@@ -67,20 +68,22 @@ class TargetedTests(unittest.TestCase):
             build.assert_not_called()
         stop.clear()
         with patch.object(llm, "call") as screen, patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"crop"], anchors)), \
-             patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}):
+             patch.object(llm_openai, "vision", return_value=self.source_result()):
             correction.run(PID, SPEC, stop=stop)
         screen.assert_not_called()
         self.assertEqual(correction.state(PID)["status"], "done")
+
 
     def test_explicit_full_check_does_not_reuse_targeted_coverage(self):
         correction.queue(PID)
         with patch.object(llm, "call", return_value=({"out": {"candidates": [], "issues": []}}, False)):
             correction.run(PID, SPEC)
-        with patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}) as vision:
+        with patch.object(llm_openai, "vision", return_value=self.source_result()) as vision:
             correction.run(PID, SPEC, scope=correction.choose(PID, {"kind": "document"}))
         self.assertEqual(vision.call_count, 2)
         self.assertEqual(correction.state(PID)["checked"], [1, 2])
         self.assertEqual(correction.state(PID)["method"], "full")
+
 
     def test_pdf_geometry_crop_uses_literal_anchor(self):
         self.assertEqual(targeted.locate("One two\nthree four five", "two three four five"), (4, 23))
@@ -101,30 +104,24 @@ class TargetedTests(unittest.TestCase):
         with Image.open(io.BytesIO(images[0])) as image:
             self.assertGreater(image.width, 900)  # short anchors cannot clip the source line/label
 
-    def test_review_failure_reuses_proposal_and_generation_waits_for_acceptance(self):
+    def test_source_failure_resumes_discovery_and_blocks_generation(self):
         correction.queue(PID)
-        edit = {"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "printed"}
-        with patch.object(llm, "call", return_value=self.screen()), \
-             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"crop"], anchors)), \
-             patch.object(llm_openai, "vision", side_effect=[{"edits": [edit], "issues": []}, RuntimeError("provider")]):
-            with self.assertRaisesRegex(RuntimeError, "provider"):
-                correction.run(PID, SPEC)
-        self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), self.md)
-        def build(doc, *args, **kwargs):
-            self.assertEqual(correction.state(PID)["status"], "done")
-            self.assertIn("A turbulent flow.", (self.d/"source.md").read_text(encoding="utf-8"))
-            for u in doc["units"].values():
-                u["lad"] = pipeline.ladder.local(u, doc["atoms"])
-        with patch.object(llm, "call") as screen, patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"crop"], anchors)), \
-             patch.object(llm_openai, "vision", return_value={"decisions": [
-                 {"index": 0, "verdict": "accept", "reason": "printed"}]}) as vision, \
-             patch.object(pipeline.ladder, "build", side_effect=build) as generated, \
-             patch.object(pipeline.links, "build"):
-            pipeline.generate(PID, "en", SPEC)
+        edit = {'before': 'Broken turbuð Þlent flow.', 'after': 'A turbulent flow.', 'reason': 'printed'}
+        with patch.object(llm, 'call', return_value=self.screen()), \
+             patch.object(targeted, 'crops', side_effect=lambda pdf, page, anchors: ([b'crop'], anchors)), \
+             patch.object(llm_openai, 'vision', side_effect=RuntimeError('provider')), \
+             patch.object(pipeline.ladder, 'build') as generated:
+            with self.assertRaisesRegex(RuntimeError, 'provider'):
+                pipeline.generate(PID, 'en', SPEC)
+            generated.assert_not_called()
+        self.assertEqual((self.d/'source.md').read_text(encoding='utf-8'), self.md)
+        with patch.object(llm, 'call') as screen, \
+             patch.object(targeted, 'crops', side_effect=lambda pdf, page, anchors: ([b'crop'], anchors)), \
+             patch.object(llm_openai, 'vision', return_value=self.source_result([edit], 'corrected')) as vision:
+            correction.run(PID, SPEC)
         screen.assert_not_called()
         self.assertEqual(vision.call_count, 1)
-        self.assertIs(vision.call_args.args[1], correction.REVIEW)
-        generated.assert_called_once()
+        self.assertEqual(correction.state(PID)['status'], 'done')
 
     def test_candidates_on_same_page_share_requests_and_identical_image(self):
         correction.queue(PID)
@@ -132,52 +129,43 @@ class TargetedTests(unittest.TestCase):
         response[0]["out"]["candidates"].append({"before": "A healthy paragraph with $x+y$.",
                 "anchor": "A healthy paragraph with", "page": 1, "reason": "possible boundary"})
         with patch.object(llm, "call", return_value=response), patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"same-crop"], anchors)), \
-             patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}) as vision:
+             patch.object(llm_openai, "vision", return_value=self.source_result(candidates=(0, 1))) as vision:
             correction.run(PID, SPEC)
         self.assertEqual(vision.call_count, 1)
         self.assertEqual(vision.call_args.args[3], [b"same-crop"])
         self.assertEqual(correction.state(PID)["done"], 2)
 
-    def test_overlapping_proposals_keep_the_reviewable_edit_and_record_the_rest(self):
+
+    def test_overlapping_source_edits_withhold_incomplete_candidate(self):
         correction.queue(PID)
-        proposed = [{"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "printed"},
-                    {"before": "turbuð Þlent", "after": "turbulent", "reason": "same damaged word"}]
-        with patch.object(llm, "call", return_value=self.screen()), \
-             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"crop"], anchors)), \
-             patch.object(llm_openai, "vision", side_effect=[{"edits": proposed, "issues": []},
-                 {"decisions": [{"index": 0, "verdict": "accept", "reason": "printed"}]}]):
+        edits = [{'before': 'Broken turbuð Þlent flow.', 'after': 'A turbulent flow.', 'reason': 'printed'},
+                 {'before': 'turbuð Þlent', 'after': 'turbulent', 'reason': 'overlaps'}]
+        with patch.object(llm, 'call', return_value=self.screen()), \
+             patch.object(targeted, 'crops', side_effect=lambda pdf, page, anchors: ([b'crop'], anchors)), \
+             patch.object(llm_openai, 'vision', return_value=self.source_result(edits, 'corrected')):
             correction.run(PID, SPEC)
-        self.assertEqual(correction.state(PID)["status"], "done")
-        self.assertTrue(correction.state(PID)["issues"])
-        self.assertIn("A turbulent flow.", (self.d/"source.md").read_text(encoding="utf-8"))
+        self.assertEqual((self.d/'source.md').read_text(encoding='utf-8'), self.md)
+        self.assertTrue(correction.state(PID)['issues'])
 
     def test_rejected_restoration_keeps_missing_label_explicit(self):
         correction.queue(PID)
-        result = {"edits": [{"before": "Broken turbuð Þlent flow.",
-                  "after": "A formula $x=y\\tag{1}$.", "reason": "restore display"}],
-                  "issues": [], "displays": [{"number": "1", "present": False, "box": [0, 0, 1, 1]}]}
-        with patch.object(llm, "call", return_value=self.screen()), \
-             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"crop"], anchors)), \
-             patch.object(llm_openai, "vision", side_effect=[result, {"decisions": [
-                 {"index": 0, "verdict": "reject", "reason": "wrong printed variable in proposed formula"}]}]):
+        result = self.source_result(verdict='unresolved')
+        result['decisions'][0]['reason'] = 'Printed display label 1 remains unreadable'
+        with patch.object(llm, 'call', return_value=self.screen()), \
+             patch.object(targeted, 'crops', side_effect=lambda pdf, page, anchors: ([b'crop'], anchors)), \
+             patch.object(llm_openai, 'vision', return_value=result):
             correction.run(PID, SPEC)
-        self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), self.md)
-        self.assertTrue(any("1" in issue["text"] for issue in correction.state(PID)["issues"]))
+        self.assertEqual((self.d/'source.md').read_text(encoding='utf-8'), self.md)
+        self.assertTrue(any('label 1' in x['text'] for x in correction.state(PID)['issues']))
 
-    def test_partial_review_cannot_publish_a_new_dangling_footnote(self):
-        correction.queue(PID)
-        result = {"edits": [
-            {"before": "Broken turbuð Þlent flow.", "after": "Corrected turbulent flow[^1].", "reason": "printed marker"},
-            {"before": "A healthy paragraph with $x+y$.", "after": "A healthy paragraph with $x+y$.\n\n[^1]: Printed note.", "reason": "restore footnote"},
-            {"before": "# Method", "after": "# Method result", "reason": "printed heading"}], "issues": [], "displays": []}
-        decisions = [{"index": i, "verdict": "reject" if i == 1 else "accept", "reason": "visible"} for i in range(3)]
-        with patch.object(llm, "call", return_value=self.screen()), \
-             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"crop"], anchors)), \
-             patch.object(llm_openai, "vision", side_effect=[result, {"decisions": decisions}]):
-            correction.run(PID, SPEC)
-        self.assertNotIn('[^1]', (self.d/'source.html').read_text(encoding='utf-8'))
-        self.assertIn('# Method result', (self.d/'source.md').read_text(encoding='utf-8'))
-        self.assertTrue(any('footnote' in issue['text'] for issue in correction.state(PID)['issues']))
+    def test_source_publication_cannot_leave_a_dangling_footnote(self):
+        work = {'text': self.md, 'issues': []}
+        edits = [{'before': 'Broken turbuð Þlent flow.', 'after': 'Corrected flow[^1].', 'reason': 'printed marker'},
+                 {'before': '# Method', 'after': '# Method result', 'reason': 'heading'}]
+        blocked = targeted.apply_edits(work, edits, self.d, 1)
+        self.assertEqual(blocked, [edits[0]])
+        self.assertNotIn('[^1]', work['text'])
+        self.assertIn('# Method result', work['text'])
 
     def test_screen_observations_are_not_asserted_as_unresolved_pdf_findings(self):
         correction.queue(PID)
@@ -224,7 +212,7 @@ class TargetedTests(unittest.TestCase):
         self.assertIn("Value 12.", source)
         self.assertTrue(any("Numerical" in x["text"] for x in correction.state(PID)["issues"]))
 
-    def test_cross_page_candidates_share_proposal_and_review(self):
+    def test_cross_page_candidates_share_one_source_decision(self):
         correction.queue(PID)
         response = self.screen()
         response[0]["out"]["candidates"].append({"before": "A healthy paragraph with $x+y$.",
@@ -232,13 +220,13 @@ class TargetedTests(unittest.TestCase):
         edit = {"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "printed"}
         with patch.object(llm, "call", return_value=response), \
              patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([str(page).encode()], anchors)), \
-             patch.object(llm_openai, "vision", side_effect=[{"edits": [edit], "issues": []},
-                 {"decisions": [{"index": 0, "verdict": "accept", "reason": "visible"}]}]) as vision:
+             patch.object(llm_openai, "vision", return_value=self.source_result([edit], 'corrected', (0, 1))) as vision:
             correction.run(PID, SPEC)
-        self.assertEqual(vision.call_count, 2)
+        self.assertEqual(vision.call_count, 1)
         self.assertEqual(vision.call_args.args[3], [b"1", b"2"])
         self.assertIn('"page": 2', vision.call_args.args[0])
         self.assertEqual(correction.state(PID)["done"], 2)
+
 
     def test_mineru_box_works_without_pdf_text_layer(self):
         import json
@@ -248,11 +236,12 @@ class TargetedTests(unittest.TestCase):
         response = self.screen()
         response[0]["out"]["candidates"][0].update(block=0, anchor="")
         with patch.object(llm, "call", return_value=response), patch.object(targeted, "crops") as fallback, \
-             patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}) as vision:
+             patch.object(llm_openai, "vision", return_value=self.source_result()) as vision:
             correction.run(PID, SPEC)
         fallback.assert_not_called()
         self.assertTrue(vision.call_args.args[3][0].startswith(b"\x89PNG"))
         self.assertIn('"block": 0', vision.call_args.args[0])
+
 
     def test_short_documents_are_not_split_at_six_pages(self):
         self.assertEqual(targeted.text_spans("paragraph\n\n" * 2000), [(0, 22000)])
@@ -309,15 +298,15 @@ class TargetedTests(unittest.TestCase):
         (self.d/"targeted-work.json").write_text(json.dumps(old), encoding="utf-8")
         with patch.object(llm, "call") as screen, \
              patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"page2"], anchors)), \
-             patch.object(llm_openai, "vision", side_effect=[{"edits": [second], "issues": []},
-                 {"decisions": [{"index": 0, "verdict": "accept", "reason": "visible minus"}]}]) as vision:
+             patch.object(llm_openai, "vision", return_value={'edits': [dict(second, candidate=1, page=2)], 'issues': [], 'displays': [], 'decisions': [{'candidate': 1, 'verdict': 'corrected', 'reason': 'visible'}]}) as vision:
             correction.run(PID, SPEC)
         screen.assert_not_called()
-        self.assertEqual(vision.call_count, 2)
+        self.assertEqual(vision.call_count, 1)
         source = (self.d/"source.md").read_text(encoding="utf-8")
         self.assertIn(first["after"], source)
         self.assertIn(second["after"], source)
         self.assertEqual(correction.state(PID)["done"], 2)
+
 
 
     def test_direct_relocation_cannot_publish_only_the_caption_deletion_half(self):
@@ -336,28 +325,25 @@ class TargetedTests(unittest.TestCase):
 
     def test_pdf_proposal_can_depend_on_an_earlier_draft_edit(self):
         correction.queue(PID)
-        first = {"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "printed word"}
-        second = {"before": "A turbulent flow.", "after": "A turbulent flow $x=y\\tag{1}$.", "reason": "printed label after first repair"}
-        with patch.object(llm, "call", return_value=self.screen()), \
-             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"source"], anchors)), \
-             patch.object(llm_openai, "vision", side_effect=[{"edits": [first, second], "issues": []},
-                 {"decisions": [{"index": i, "verdict": "accept", "reason": "visible"} for i in [1, 0]]}]):
+        edits = [{'before': 'Broken turbuð Þlent flow.', 'after': 'A turbulent flow.', 'reason': 'word'},
+                 {'before': 'A turbulent flow.', 'after': 'A turbulent flow $x=y\\tag{1}$.', 'reason': 'label'}]
+        with patch.object(llm, 'call', return_value=self.screen()), \
+             patch.object(targeted, 'crops', side_effect=lambda pdf, page, anchors: ([b'crop'], anchors)), \
+             patch.object(llm_openai, 'vision', return_value=self.source_result(edits, 'corrected')):
             correction.run(PID, SPEC)
-        self.assertIn(second["after"], (self.d/"source.md").read_text(encoding="utf-8"))
-        self.assertEqual(correction.state(PID)["edits"], 2)
+        self.assertIn(edits[1]['after'], (self.d/'source.md').read_text(encoding='utf-8'))
+        self.assertEqual(correction.state(PID)['edits'], 2)
 
     def test_rejected_prerequisite_withholds_dependent_accepted_edit(self):
         correction.queue(PID)
-        edits = [{"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "first"},
-                 {"before": "A turbulent flow.", "after": "New formula $x=y$.", "reason": "dependent"}]
-        with patch.object(llm, "call", return_value=self.screen()), \
-             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"source"], anchors)), \
-             patch.object(llm_openai, "vision", side_effect=[{"edits": edits, "issues": []},
-                 {"decisions": [{"index": 0, "verdict": "reject", "reason": "printed differs"},
-                                {"index": 1, "verdict": "accept", "reason": "label matches"}]}]):
+        edits = [{'before': 'An absent prerequisite.', 'after': 'A turbulent flow.', 'reason': 'stale'},
+                 {'before': 'A turbulent flow.', 'after': 'New formula $x=y$.', 'reason': 'dependent'}]
+        with patch.object(llm, 'call', return_value=self.screen()), \
+             patch.object(targeted, 'crops', side_effect=lambda pdf, page, anchors: ([b'crop'], anchors)), \
+             patch.object(llm_openai, 'vision', return_value=self.source_result(edits, 'corrected')):
             correction.run(PID, SPEC)
-        self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), self.md)
-        self.assertTrue(any("prerequisite" in x["text"] for x in correction.state(PID)["issues"]))
+        self.assertEqual((self.d/'source.md').read_text(encoding='utf-8'), self.md)
+        self.assertTrue(correction.state(PID)['issues'])
 
     def test_matching_block_corrects_a_guessed_physical_page(self):
         import json
@@ -367,10 +353,11 @@ class TargetedTests(unittest.TestCase):
         response = self.screen()
         response[0]["out"]["candidates"][0].update(block=0, page=1, anchor="")
         with patch.object(llm, "call", return_value=response), patch.object(targeted, "crops") as fallback, \
-             patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}) as vision:
+             patch.object(llm_openai, "vision", return_value=self.source_result()) as vision:
             correction.run(PID, SPEC)
         fallback.assert_not_called()
         self.assertIn('"page": 2', vision.call_args.args[0])
+
 
     def test_caption_text_layer_refines_an_image_inherited_box(self):
         from reportlab.pdfgen import canvas
@@ -399,11 +386,12 @@ class TargetedTests(unittest.TestCase):
         correction.queue(PID)
         edit = {"before": "$R_0$", "after": "$Ro$", "evidence": "document-symbol", "reason": "initial definition differs"}
         with patch.object(llm, "call", return_value=({"out": {"edits": [edit], "candidates": [], "issues": []}}, False)), \
-             patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}) as vision:
+             patch.object(llm_openai, "vision", return_value=self.source_result()) as vision:
             correction.run(PID, SPEC)
         self.assertEqual(vision.call_count, 1)
         self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), text)
         self.assertEqual(correction.state(PID)["issues"], [])
+
 
 
     def test_partial_math_boundary_repair_cannot_publish_a_dangling_dollar(self):
@@ -448,11 +436,15 @@ class TargetedTests(unittest.TestCase):
         correction.queue(PID)
         response = self.screen()
         response[0]["out"]["candidates"][0].update(block=0, page=1, anchor="The actual scaling exponent")
-        with patch.object(llm, "call", return_value=response), \
+        with patch.object(llm, 'call', side_effect=[response, ({'out': self.source_result()}, False)]), \
              patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"correct source"], anchors)) as crop, \
-             patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}):
+             patch.object(llm_openai, "vision", return_value=self.source_result()):
             correction.run(PID, SPEC)
-        self.assertEqual(crop.call_args.args[1], 2)
+        crop.assert_not_called()
+        import json
+        work = json.loads((self.d/'targeted-work.json').read_text(encoding='utf-8'))
+        self.assertEqual(work['pdf_text_evidence'][0]['page'], 2)
+
 
     def test_new_reference_review_gets_literal_pdf_text_without_a_separate_call(self):
         pages = ["[1] J. G. Charney, Geostrophic turbulence, J. Atom. Sci. 28, 1087 (1971)."]

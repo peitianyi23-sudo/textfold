@@ -98,7 +98,7 @@ Models (⚙ Model & API), ported from ThoughtDAG's model access:
   - **Rate limits**: a 429, 502, 503 or 529 is waited out (Retry-After, else 5, 15, 30, 45 s) and asked again.
 - **Thinking, per task**, set by the reader's tools and not by the reader (a reader is here to read):
   `models.DEFAULT_THINKING` gives the levels and takeaways off, the argument links low, the translation off, the
-  questions low, from the model bench.
+  questions low, from the model bench. A saved API model effort is retained before these defaults are applied.
   Each caller spells a level its own way: Claude Code `--effort`, and off as `MAX_THINKING_TOKENS=0`; Codex
   `model_reasoning_effort` (off as `none`, else `low`); Pi `--thinking`; the Claude API thinking and effort by model
   (off is `between_tools` on Sonnet 5.x, `disabled` on older models, the least effort where thinking cannot be
@@ -383,17 +383,25 @@ can resume. Existing papers are enrolled explicitly; there is no whole-library r
 some completed coverage and carry explicit unchecked provenance for the rest. Selected-range generation receives
 available outside extraction as unchecked context, never recursively checking dependencies.
 
-Default correction first screens MinerU Markdown with the selected PDF's existing text layer, in groups of up to
-six physical pages. Candidate passages include damaged mathematics/prose, control-character residue, fragmented
-text and missing passages or numbered displays. Unique literal PDF anchors retain their original character offsets;
-PDFium coordinates locate context crops. Candidates on the same physical page share a proposal request and an
-independent review request; overlapping source rectangles are merged before rendering. Column line geometry keeps
-formula labels and paragraph edges inside each crop. Ambiguous anchors and unreadable regions remain
-unresolved, with no automatic full-page escalation. A textless PDF explicitly retains this limitation. No new OCR,
-embedding service or producer-cache rewrite is involved. `targeted-work.json` retains screening, reviewed draft and
-completed candidate groups across interruption; existing prompt caching reuses successful screening requests.
-Text-only observations are qualified separately from PDF-backed unresolved positions. Partial review cannot publish
-a new Markdown footnote marker without its definition; the dependent edit remains unresolved.
+Default targeted correction makes one coherent text-only MinerU scan for an ordinary short paper (larger text
+splits at paragraph boundaries). Compact block/page hints help identify source questions without duplicating the
+whole original PDF text. It directly repairs unambiguous document-context extraction faults; notation consistency
+or scientific plausibility alone does not establish damage. Numeric changes and omitted formulas need original
+source evidence. Candidates include corrupted exponents, accents, Greek/Latin variants, control residue,
+fragmented text and omitted displays, including syntactically plausible faults.
+
+Candidate-local original PDF characters and baseline/font-size placement join the same decision request as any
+necessary local images. Readable complete source characters can establish a repair; faulty symbol-font mappings
+cannot. Only questions lacking usable characters receive images initially; unresolved text readings may receive a
+local image follow-up. There is no fixed broad character-judgment pass or blanket second image review. Independent
+questions batch within readable image payload limits. Literal words near a question can override a MinerU
+paragraph's inherited page when the paragraph spans pages. Ambiguous/unreadable locations remain unresolved,
+without automatic full-page escalation or new OCR. Producer caches remain read-only.
+
+`targeted-work.json` retains discovery, original evidence, decisions, draft edits and completed groups across
+interruption. Text observations remain separate from PDF-backed findings. Source decisions require complete exact
+candidate patches: a stale/nonunique dependent edit, partial decimal, lost caption or dangling math/footnote
+boundary withholds the incomplete repair. Caption relocations must preserve all moved content in one edit.
 Targeted completion leaves physical `checked` coverage empty and records its method separately; derived layers
 start after that workflow ends and receive its unresolved issues.
 
