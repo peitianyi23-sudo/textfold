@@ -1,4 +1,4 @@
-"""Default discovery uses text; edits require local image evidence and a second decision."""
+"""Document-context repairs and cross-page evidence preserve source and publication boundaries."""
 import threading
 import io
 import unittest
@@ -190,3 +190,92 @@ class TargetedTests(unittest.TestCase):
         self.assertEqual(state['screen_notes'], [observation])
         self.assertFalse(any(observation in issue['text'] for issue in state['issues']))
         self.assertTrue(any('source location' in issue['text'] for issue in state['issues']))
+
+
+    def test_direct_document_repairs_need_only_one_text_request(self):
+        correction.queue(PID)
+        edit = {"before": "Broken turbuð Þlent flow.", "after": "Broken turbulent flow.",
+                "reason": "The unique repeated phrase establishes the damaged word", "evidence": "document-text"}
+        with patch.object(llm, "call", return_value=({"out": {"edits": [edit], "candidates": [], "issues": []}}, False)) as call, \
+             patch.object(llm_openai, "vision") as vision:
+            correction.run(PID, SPEC)
+        self.assertEqual(call.call_count, 1)
+        vision.assert_not_called()
+        self.assertIn("Broken turbulent flow.", (self.d/"source.md").read_text(encoding="utf-8"))
+        self.assertEqual(correction.state(PID)["edits"], 1)
+        import json
+        history = json.loads((self.d/"targeted-work.json").read_text(encoding="utf-8"))["history"]
+        self.assertEqual(history[0]["edits"][0]["evidence"], "document-text")
+
+    def test_direct_symbol_repair_and_numerical_evidence_boundary(self):
+        text = self.md + "\nDefined $u$ is velocity. Repeated $u+x$. Damaged $v+x$. Value 12.\n"
+        (self.d/"source.md").write_text(text, encoding="utf-8")
+        (self.d/"source.html").write_text(correction.render(text, {}), encoding="utf-8")
+        correction.queue(PID)
+        edits = [{"before": "Damaged $v+x$.", "after": "Damaged $u+x$.",
+                  "reason": "Explicit document definition and identical repeated expression establish extraction fault", "evidence": "document-symbol"},
+                 {"before": "Value 12.", "after": "Value 13.", "reason": "suspected numeric error", "evidence": "document-text"}]
+        with patch.object(llm, "call", return_value=({"out": {"edits": edits, "candidates": [], "issues": []}}, False)), \
+             patch.object(llm_openai, "vision") as vision:
+            correction.run(PID, SPEC)
+        vision.assert_not_called()
+        source = (self.d/"source.md").read_text(encoding="utf-8")
+        self.assertIn("Damaged $u+x$.", source)
+        self.assertIn("Value 12.", source)
+        self.assertTrue(any("Numerical" in x["text"] for x in correction.state(PID)["issues"]))
+
+    def test_cross_page_candidates_share_proposal_and_review(self):
+        correction.queue(PID)
+        response = self.screen()
+        response[0]["out"]["candidates"].append({"before": "A healthy paragraph with $x+y$.",
+             "anchor": "A healthy paragraph with", "page": 2, "reason": "possible boundary"})
+        edit = {"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "printed"}
+        with patch.object(llm, "call", return_value=response), \
+             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([str(page).encode()], anchors)), \
+             patch.object(llm_openai, "vision", side_effect=[{"edits": [edit], "issues": []},
+                 {"decisions": [{"index": 0, "verdict": "accept", "reason": "visible"}]}]) as vision:
+            correction.run(PID, SPEC)
+        self.assertEqual(vision.call_count, 2)
+        self.assertEqual(vision.call_args.args[3], [b"1", b"2"])
+        self.assertIn('"page": 2', vision.call_args.args[0])
+        self.assertEqual(correction.state(PID)["done"], 2)
+
+    def test_mineru_box_works_without_pdf_text_layer(self):
+        import json
+        (self.d/"layout.json").write_text(json.dumps([
+            {"p": 1, "b": [.1, .2, .8, .4], "t": "Broken turbuð Þlent flow."}]), encoding="utf-8")
+        correction.queue(PID)
+        response = self.screen()
+        response[0]["out"]["candidates"][0].update(block=0, anchor="")
+        with patch.object(llm, "call", return_value=response), patch.object(targeted, "crops") as fallback, \
+             patch.object(llm_openai, "vision", return_value={"edits": [], "issues": []}) as vision:
+            correction.run(PID, SPEC)
+        fallback.assert_not_called()
+        self.assertTrue(vision.call_args.args[3][0].startswith(b"\x89PNG"))
+        self.assertIn('"block": 0', vision.call_args.args[0])
+
+    def test_short_documents_are_not_split_at_six_pages(self):
+        self.assertEqual(targeted.text_spans("paragraph\n\n" * 2000), [(0, 22000)])
+        text = "paragraph\n\n" * 20000
+        spans = targeted.text_spans(text)
+        self.assertEqual("".join(text[a:b] for a, b in spans), text)
+        self.assertTrue(all(b-a <= 90000 for a, b in spans))
+
+
+    def test_number_guard_detects_values_and_keeps_duplicate_cleanup_possible(self):
+        self.assertEqual(targeted.number_values("$1 2 . 0$"), targeted.number_values("$12.0$"))
+        self.assertTrue(targeted.number_values("$1.0$") - targeted.number_values("$0.1$"))
+        self.assertTrue(targeted.number_values("$+1$") - targeted.number_values("$-1$"))
+        self.assertFalse(targeted.number_values("$x_0$ ") - targeted.number_values("$x_0$ x0"))
+
+    def test_clean_screen_uses_no_images_and_preserves_author_notation(self):
+        text = self.md + "\nDefined $u$; printed result $v=x$. Defined $alpha$; printed scale $beta$.\n"
+        (self.d/"source.md").write_text(text, encoding="utf-8")
+        (self.d/"source.html").write_text(correction.render(text, {}), encoding="utf-8")
+        correction.queue(PID)
+        with patch.object(llm, "call", return_value=({"out": {"edits": [], "candidates": [], "issues": []}}, False)) as call, \
+             patch.object(llm_openai, "vision") as vision:
+            correction.run(PID, SPEC)
+        vision.assert_not_called()
+        self.assertIn("physical plausibility", call.call_args.args[0])
+        self.assertEqual((self.d/"source.md").read_text(encoding="utf-8"), text)
