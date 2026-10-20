@@ -137,3 +137,16 @@ class TargetedTests(unittest.TestCase):
         self.assertEqual(vision.call_count, 1)
         self.assertEqual(vision.call_args.args[3], [b"same-crop"])
         self.assertEqual(correction.state(PID)["done"], 2)
+
+    def test_overlapping_proposals_keep_the_reviewable_edit_and_record_the_rest(self):
+        correction.queue(PID)
+        proposed = [{"before": "Broken turbuð Þlent flow.", "after": "A turbulent flow.", "reason": "printed"},
+                    {"before": "turbuð Þlent", "after": "turbulent", "reason": "same damaged word"}]
+        with patch.object(llm, "call", return_value=self.screen()), \
+             patch.object(targeted, "crops", side_effect=lambda pdf, page, anchors: ([b"crop"], anchors)), \
+             patch.object(llm_openai, "vision", side_effect=[{"edits": proposed, "issues": []},
+                 {"decisions": [{"index": 0, "verdict": "accept", "reason": "printed"}]}]):
+            correction.run(PID, SPEC)
+        self.assertEqual(correction.state(PID)["status"], "done")
+        self.assertTrue(correction.state(PID)["issues"])
+        self.assertIn("A turbulent flow.", (self.d/"source.md").read_text(encoding="utf-8"))

@@ -210,11 +210,12 @@ def run(pid, spec, progress=lambda *a: None, stop=None):
                     work["proposals"][str(index)] = {"local": local, "result": result}
                     c._write(d, wf.name, work)
                 edits = []
+                proposed_text = work["text"]
                 for edit in result["edits"]:
                     try:
                         if edit["before"] not in local:
                             raise ValueError("outside supplied context")
-                        c.patches(work["text"], [edit])
+                        proposed_text = c.patches(proposed_text, [edit])
                         edits.append(edit)
                     except ValueError as e:
                         work["issues"].append({"page": page, "text": str(e)})
