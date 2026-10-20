@@ -21,6 +21,28 @@ def convert(blocks, crops=None):
 
 
 class FigureGroupsTest(unittest.TestCase):
+    def test_caption_beside_two_panels_is_attached_once(self):
+        panels = [picture([.078,.811,.339,.957]), picture([.349,.811,.586,.957])]
+        caption = {'type': 'text', 'bbox': [.705,.835,.916,.935],
+                   'content': 'FIG. 4. Convergence of internal and kinetic transfer.'}
+        md, want = convert(panels + [caption])
+        self.assertNotIn('Unconfirmed', md)
+        self.assertEqual(md.count('<figcaption>'), 1)
+        self.assertEqual(md.count(caption['content']), 1)
+        self.assertEqual(set(want[0]['blocks']), {id(p) for p in panels})
+        self.assertLess(want[0]['box'][2], caption['bbox'][0])
+
+    def test_column_figures_with_different_panel_heights_stay_separate(self):
+        left = [picture([.080,.061,.477,.202]), picture([.078,.196,.477,.334]),
+                picture([.088,.330,.483,.506], ['FIG. 2. Three autospectra.'])]
+        right = [picture([.508,.061,.704,.260]),
+                 picture([.723,.061,.916,.260], ['FIG. 3. Two transfer rates.'])]
+        md, want = convert(left[:2] + [left[2], right[0], right[1]])
+        self.assertNotIn('Unconfirmed', md)
+        self.assertEqual(md.count('<figure>'), 2)
+        self.assertEqual({frozenset(w['blocks']) for w in want},
+                         {frozenset(id(p) for p in left), frozenset(id(p) for p in right)})
+
     def test_six_mixed_panels_interleaved_with_column_prose(self):
         a = picture([.12,.49,.37,.62], ["Full field", "(a)"])
         prose = {"type":"text", "bbox":[.51,.06,.95,.45], "content":"The other column of narrative remains outside the figure."}

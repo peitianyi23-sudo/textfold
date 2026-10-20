@@ -166,6 +166,15 @@ def _figure_groups(blocks, page_of):
             box = c["bbox"]
             candidates = [b for b in pics if 0 <= box[1] - b["bbox"][3] <= .08 and
                           min(box[2], b["bbox"][2]) > max(box[0], b["bbox"][0])]
+            if not candidates:
+                # Wide, short figures can put their complete caption to the right.
+                # Use the nearest panel on the caption's rows, not a page fallback.
+                beside = [b for b in pics if 0 <= box[0] - b['bbox'][2] <= .15 and
+                          min(box[3], b['bbox'][3]) - max(box[1], b['bbox'][1]) >=
+                          .5 * min(box[3] - box[1], b['bbox'][3] - b['bbox'][1])]
+                if beside:
+                    b = min(beside, key=lambda b: box[0] - b['bbox'][2])
+                    candidates = [b]
             if candidates:
                 bottom = max(b["bbox"][3] for b in candidates)
                 candidates = [b for b in candidates if bottom - b["bbox"][3] <= NEAR]
@@ -202,7 +211,29 @@ def _figure_groups(blocks, page_of):
             if len(adjacent) == 1:
                 assigned[next(iter(adjacent))].update(component)
             elif len(adjacent) > 1:
-                unresolved.append(component | adjacent)
+                # Nearby columns need not be one figure. In an ambiguous component,
+                # first follow panels aligned in rows or columns to their captions.
+                def aligned(a, b):
+                    x, y = by_id[a]['bbox'], by_id[b]['bbox']
+                    return (abs(x[0] - y[0]) <= NEAR and abs(x[2] - y[2]) <= NEAR or
+                            abs(x[1] - y[1]) <= NEAR and abs(x[3] - y[3]) <= NEAR)
+                split_seen = set()
+                for j in component:
+                    if j in split_seen:
+                        continue
+                    part, todo = set(), [j]
+                    while todo:
+                        k = todo.pop()
+                        if k in part:
+                            continue
+                        part.add(k)
+                        todo.extend(n for n in edges[k] & component - part if aligned(k, n))
+                    split_seen.update(part)
+                    labels = {n for k in part for n in edges[k] & adjacent if aligned(k, n)}
+                    if len(labels) == 1:
+                        assigned[next(iter(labels))].update(part)
+                    else:
+                        unresolved.append(part | adjacent)
             else:
                 assigned[i] = component
         # Several ambiguous components can share a caption. Render their page only once.
