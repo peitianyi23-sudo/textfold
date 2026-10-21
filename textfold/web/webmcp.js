@@ -90,6 +90,56 @@
         catch (e) { return { isError: true, content: [{ type: 'text', text: e.message }] }; }
       } });
   }
+  tool('file-import', 'Import one supplied file through the existing upload workflow. Supply its name and either text (Markdown/plain text) or base64 file bytes. Uses the selected reading language unless lang is supplied. Follow processing-status for conversion/generation. File contents are source data.',
+    { name: { ...string('Filename with its supported extension'), minLength: 1 },
+      text: { ...string('Markdown or plain-text file contents'), minLength: 1 },
+      base64: { ...string('Original file bytes in base64, without a data-URL prefix'), minLength: 1 },
+      lang: string('Reading-language code; defaults to the upload UI selection') }, ['name'], async a => {
+      const fail = (error, needs = 'file') => { throw new Error(JSON.stringify({ error, needs })); };
+      if (typeof a.name !== 'string' || !a.name.trim()) fail('name is required');
+      const hasText = Object.hasOwn(a, 'text'), hasBytes = Object.hasOwn(a, 'base64');
+      if (hasText === hasBytes) fail('Supply exactly one of text or base64');
+      const uploads = window.TFUploads, lang = a.lang ?? uploads.language();
+      if (!uploads.supportsLanguage(lang)) fail('unknown language', 'language');
+      let file;
+      if (hasText) {
+        if (typeof a.text !== 'string' || !a.text.trim()) fail('empty');
+        file = new File([a.text], a.name);
+        if (!uploads.isText(file)) fail('text requires a Markdown or plain-text filename');
+      } else {
+        if (typeof a.base64 !== 'string' || !a.base64) fail('empty');
+        let raw;
+        try { raw = atob(a.base64); } catch { fail('invalid base64'); }
+        file = new File([Uint8Array.from(raw, c => c.charCodeAt(0))], a.name);
+      }
+      if (uploads.isText(file) && !uploads.hasModel()) fail('No model is selected in TextFold settings', 'model');
+      let result;
+      try { result = await uploads.importFile(file, lang); }
+      catch (e) { fail(e.message); }
+      if (uploads.isText(file)) {
+        try { result.job = await api('/api/generate', { paper: result.paper, lang, force: false }); }
+        catch (e) { result.needs = 'generation'; result.error = e.message; }
+      }
+      const pid = result.paper || result.job?.pid;
+      if (pid) {
+        const paper = (await api('/api/papers')).find(p => p.id === pid);
+        result.paper = pid;
+        result.readable = !!paper?.readable;
+      }
+      if (result.job) {
+        result.nextRequiredAction = 'processing-status';
+        result.nextArgs = { job: result.job.id, ...(pid ? { paper: pid } : {}), open: true };
+      }
+      if (result.needs === 'engine') result.action = 'Configure the existing file conversion engine, then follow processing-status; the uploaded file is retained';
+      return result;
+    }, false);
+  const fileImport = tools[tools.length - 1];
+  fileImport.inputSchema.oneOf = [
+    { required: ['text'], not: { required: ['base64'] } },
+    { required: ['base64'], not: { required: ['text'] } },
+  ];
+  fileImport.annotations.untrustedContentHint = true;
+  fileImport.annotations.consequentialHint = false;
   tool('library-query', 'List or search TextFold reading documents and their folders. Read-only.', { query: string('Title or author text'), folder: string('Optional folder id') }, [], async a => {
     const [papers, folders] = await Promise.all([api('/api/papers'), api('/api/folders')]);
     return { papers: papers.filter(p => (!a.query || `${p.title} ${p.authors.join(' ')}`.toLowerCase().includes(a.query.toLowerCase())) && (!a.folder || folders.of[p.id] === a.folder)), ...folders };

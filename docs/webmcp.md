@@ -1,6 +1,6 @@
 # Browser reading tools
 
-TextFold registers 18 tools with `document.modelContext.registerTool` on its landing and reader pages. A browser host
+TextFold registers 19 tools with `document.modelContext.registerTool` on its landing and reader pages. A browser host
 with WebMCP support discovers and invokes them directly. Browsers without WebMCP keep the normal interface; TextFold
 does not install a synthetic registry or claim browser support through a REST manifest.
 
@@ -11,6 +11,7 @@ tool names; discover the current catalog again after navigation.
 | Tools | Purpose |
 | --- | --- |
 | `library-query`, `library-open` | Find and open existing reading documents; list folders |
+| `file-import` | Upload a supplied file through the same operation as file selection or drag/drop |
 | `zotero-query`, `zotero-import` | Find items, enumerate exact attachments, import the selected cached PDF |
 | `documentation-preview`, `documentation-import` | Inspect a directory without writing, or import it directly as one work |
 | `documentation-update`, `documentation-retry` | Explicit source refresh, or fetch only failed pages |
@@ -63,6 +64,9 @@ llm-for-zotero cache; it neither produces that cache nor modifies the original P
 original-language generation; repeated imports open the existing copy without regeneration.
 
 ## Validation
+
+For `file-import` arguments and ownership, see the [file-import contract](design/webmcp-file-import-design.md).
+Its [validation record](webmcp-file-import-validation.md) distinguishes isolated fixtures from the live import.
 
 Run `python -m unittest discover tests`. `tests/test_documentation.py` covers directory order/hierarchy, fragment
 deduplication, readable partial imports, failed-page-only retry, repeated import reuse, source provenance, internal
