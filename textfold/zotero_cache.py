@@ -38,11 +38,11 @@ def find(lib, parent, attachment, pdf, data_dir):
                 source = folder / "_llm_source.json"
                 if source.exists():
                     identity = read_json(source)
-                    if (identity.get("attachmentId"), identity.get("attachmentKey"), identity.get("parentItemKey")) != (row[0], attachment, parent):
+                    if (identity.get("attachmentId"), identity.get("attachmentKey")) != (row[0], attachment):
                         return None
-                else:
+                if not source.exists() or identity.get("parentItemKey") != parent:
                     # Older local caches predate provenance files. The current database
-                    # identifies their numeric folder and its exact parent within this library.
+                    # also owns the current parent after a PDF is reparented or merged.
                     owner = conn.execute("SELECT p.key FROM itemAttachments a JOIN items p ON p.itemID=a.parentItemID "
                                          "WHERE a.itemID=?", (row[0],)).fetchone()
                     if not owner or owner[0] != parent:
