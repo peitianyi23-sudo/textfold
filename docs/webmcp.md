@@ -5,7 +5,7 @@ with WebMCP support discovers and invokes them directly. Browsers without WebMCP
 does not install a synthetic registry or claim browser support through a REST manifest.
 
 The registration follows the [WebMCP imperative API](https://github.com/webmachinelearning/webmcp). Tool results use
-text content containing JSON, including actionable failures. The browser may attach a document-specific suffix to
+text content containing JSON, including actionable failures. Tools returning external content carry `untrustedContentHint`; deleting an annotation carries `consequentialHint`, following upstream. The browser may attach a document-specific suffix to
 tool names; discover the current catalog again after navigation.
 
 | Tools | Purpose |
@@ -16,7 +16,7 @@ tool names; discover the current catalog again after navigation.
 | `documentation-preview`, `documentation-import` | Inspect a directory without writing, or import it directly as one work |
 | `documentation-update`, `documentation-retry` | Explicit source refresh, or fetch only failed pages |
 | `folder-create`, `folder-rename`, `document-move` | Organize the existing library |
-| `reading-context`, `reading-navigate` | Current selection, original passage/formula and surrounding context; chapter/unit navigation |
+| `reading-context`, `reading-navigate` | Current selection, original passage/formula and surrounding context; chapter/section/unit navigation |
 | `annotation-list`, `annotation-create`, `annotation-update`, `annotation-delete` | Saved notes/highlights in the existing notes format |
 | `processing-status` | Import/generation jobs, readable content, failed chapters, unresolved annotations |
 

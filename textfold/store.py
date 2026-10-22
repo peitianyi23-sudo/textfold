@@ -3,7 +3,8 @@
   papers/<id>/source.html, meta.json     the arXiv HTML, fetched once (or a document from this computer, local.py)
   papers/<id>/layers/en.json             the English ladder and the argument links
   papers/<id>/layers/tr-<lang>.json      one translation, stamped with the English version it was built on
-  papers/.trash/<id>-<time>/             a paper the reader deleted (moved there whole, notes included; not listed)
+  papers/.trash/<id>-<time>/             a paper the reader deleted (moved there whole, notes included; not listed), with
+                                         library.json: its place in the library, for the reader's Undo (untrash)
 
 A model samples differently on every run, so the same paper does not come out the same twice.
 The layers are what makes a paper read the same every time it is opened: a reader is assembled
@@ -11,6 +12,7 @@ from them without any model call, and "regenerate" replaces one layer with a new
 A translation whose English base has since been regenerated is reported as stale.
 """
 import json
+import locale
 import os
 import re
 import sys
@@ -19,6 +21,37 @@ import threading
 from pathlib import Path
 
 from . import ladder
+
+
+def codepage():
+    """The system's own encoding for a text file saved in its locale: a Chinese Windows's GBK, a German one's
+    Windows-1252, UTF-8 on a Mac. Python 3.11's getencoding() is not swayed by UTF-8 mode, which the app runs in."""
+    get = getattr(locale, "getencoding", None)
+    return (get() if get else locale.getpreferredencoding(False)) or "utf-8"
+
+
+def read_text(f):
+    """A file of TextFold's own (a paper's meta.json, source.html and layers, the library, the settings, the notes, a
+    kept reply), as text. It is written as UTF-8; TextFold 0.10.9 and before wrote it on Windows in the system's
+    codepage (GBK on a Chinese Windows: a title, a translation, a note in Chinese), and such a file is read in that and
+    written again as UTF-8, so the library an update finds still opens. Line ends as Path.read_text gives them."""
+    raw = Path(f).read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = raw.decode(codepage())
+        except (UnicodeDecodeError, LookupError):
+            return raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        tmp = Path(f).with_name(Path(f).name + ".utf8")
+        try:   # once: from now on it reads as UTF-8
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, f)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+        return text
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 from .fetch import paper_id
 from .parse import parse
 
@@ -110,7 +143,7 @@ def _file(pid, name):
 
 def read(pid, name):
     f = _file(pid, name)
-    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+    return json.loads(read_text(f)) if f.exists() else None
 
 
 def write(pid, name, data):
@@ -144,8 +177,9 @@ def save_tr(doc, lang, base, model):
 
 
 def apply_en(doc, en):
+    cjk = ladder.cjk_doc(doc)
     for uid, u in doc["units"].items():
-        u["lad"] = en["units"].get(uid) or ladder.local(u, doc["atoms"])
+        u["lad"] = en["units"].get(uid) or ladder.local(u, doc["atoms"], cjk)
     for c in doc["chunks"]:
         c["lad"] = en["chunks"].get(c["id"])
     have = {(e["f"], e["t"]) for e in en["edges"]}
@@ -172,14 +206,14 @@ def languages(pid):
 def parsed(pid):
     with SOURCE_LOCK:
         d = pdir(pid)
-        meta = json.loads((d / "meta.json").read_text(encoding='utf-8'))
+        meta = json.loads(read_text(d / "meta.json"))
         f = d / "correction.json"
         if f.exists():
             meta["correction"] = json.loads(f.read_text(encoding="utf-8"))
             requested = d / "correction-request.json"
             if requested.exists():
                 meta["correction"]["requested_scope"] = json.loads(requested.read_text(encoding="utf-8"))
-        return parse((d / "source.html").read_text(encoding='utf-8'), meta)
+        return parse(read_text(d / "source.html"), meta)
 
 
 def assemble(pid, only=None):
@@ -194,13 +228,16 @@ def _assemble(pid, only=None):
     en = read(pid, "en")
     meta = doc["meta"]
     meta["langs"], meta["stale"], meta["versions"] = [], [], {}
+    cjk = ladder.cjk_doc(doc)
+    if cjk:   # the reader's CJK rules (an English paper's page carries nothing new)
+        meta["cjk"] = True
     if en:
         apply_en(doc, en)
         meta["langs"].append("en")
         meta["versions"]["en"] = en["version"]
     else:
         for u in doc["units"].values():
-            u["lad"] = ladder.local(u, doc["atoms"])
+            u["lad"] = ladder.local(u, doc["atoms"], cjk)
     for lang in languages(pid):
         if only is not None and lang not in only:
             continue
@@ -210,6 +247,11 @@ def _assemble(pid, only=None):
         meta["versions"][lang] = tr["version"]
         if not en or tr.get("base") != en["version"]:
             meta["stale"].append(lang)
+        else:   # paragraphs it has no translation for (a call that failed): asked for when it is generated again
+            from .translate import gaps   # (translate imports ladder and llm, which read through this module)
+            n = len(gaps(doc, lang))
+            if n:
+                meta.setdefault("gaps", {})[lang] = n
     return doc
 
 
@@ -221,7 +263,7 @@ def papers():
         mf = d / "meta.json"
         if d.name.startswith(".") or not mf.exists():
             continue
-        meta = json.loads(mf.read_text(encoding="utf-8"))
+        meta = json.loads(read_text(mf))
         en = read(d.name, "en")
         langs_ = (["en"] if en else []) + languages(d.name)
         titles = {}
@@ -234,15 +276,36 @@ def papers():
         out.append({"id": d.name, "title": meta["title"], "titles": titles, "authors": meta.get("authors", []),
                     "langs": langs_, "reading_mode": meta.get("reading_mode", "translated"), "readable": (d / "source.html").is_file(),
                     "updated": max(mtimes) if mtimes else mf.stat().st_mtime,
-                    "notes": len(json.loads(nf.read_text(encoding='utf-8')).get("notes", [])) if nf.exists() else 0,
+                    "notes": len(json.loads(read_text(nf)).get("notes", [])) if nf.exists() else 0,
                     **({"zotero": True} if meta.get("zotero") else {})})
     return sorted(out, key=lambda p: -p["updated"])
 
 
-def trash(pid):
+def trash(pid, kept=None):
     """Delete a paper from the list: its folder (source, layers, model replies, notes) moves to papers/.trash, from
-    where it can be moved back by hand. Nothing is erased."""
+    where it can be moved back (untrash, or by hand). Nothing is erased. kept: its place in the library, kept with it."""
     to = DATA / "papers" / ".trash" / f"{pid}-{time.strftime('%Y%m%d-%H%M%S')}"
     to.parent.mkdir(parents=True, exist_ok=True)
     pdir(pid).rename(to)
+    if kept:
+        (to / "library.json").write_text(json.dumps(kept, ensure_ascii=False), encoding="utf-8")
     return to
+
+
+def untrash(pid):
+    """A paper deleted last back in the list, as it was (its latest time in papers/.trash), and its place in the
+    library as trash kept it ({} when none); None when there is none there, or a paper of that id is listed again."""
+    if not valid_id(pid) or pdir(pid).exists():
+        return None
+    at = re.compile(re.escape(pid) + r"-\d{8}-\d{6}")
+    gone = sorted(d for d in (DATA / "papers" / ".trash").glob(f"{pid}-*") if at.fullmatch(d.name) and (d / "meta.json").exists())
+    if not gone:
+        return None
+    kept_f = gone[-1] / "library.json"
+    try:
+        kept = json.loads(read_text(kept_f)) if kept_f.exists() else {}
+    except (OSError, ValueError):
+        kept = {}
+    gone[-1].rename(pdir(pid))
+    (pdir(pid) / "library.json").unlink(missing_ok=True)
+    return kept if isinstance(kept, dict) else {}

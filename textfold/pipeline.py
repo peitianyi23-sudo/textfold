@@ -3,6 +3,14 @@
 Every step reports through `progress(stage, done, total)`; the server turns that into a progress bar. A set `stop`
 (a threading.Event) ends it with llm.Stopped at the next step: what the model has already written stays in the cache,
 so the same generation started again goes on from there.
+
+`force` asks the model again for every section (a new sample), with one exception: a document whose text was replaced
+in place (local.replace_text) has no layers until it is folded again, and those are made from the replies kept for it,
+so only the sections whose prompts changed are asked. A section's prompt holds the title, the opening, the outline and
+its own text: an edit in one section asks for that section alone (and the argument links, one call over every
+paragraph's takeaway, when a takeaway came back changed); an edit to the title, the opening or a heading asks for every
+section. A translation's prompt also numbers the formulas, links and other atoms of the whole text in order, so a
+section after an atom added or taken out is translated again too.
 """
 import urllib.error
 
@@ -74,8 +82,9 @@ def generate(ref, lang, cfg, force=False, jobs=4, progress=lambda *a: None, log=
     en = store.read(pid, "en")
     if cfg is None and (en is None or en.get("incomplete") or force or (lang != "en" and store.read(pid, f"tr-{lang}") is None)):
         # fetched and parsed, so it can be read as written; its levels need a model
-        raise RuntimeError("No model is available: install Claude Code, Codex or Pi, or add an API provider in the settings")
+        raise RuntimeError("No model is available: install Claude Code, Codex, Pi or WorkBuddy, or add an API provider in the settings")
     model = llm.label(cfg) if cfg else ""
+    replaced = bool(doc["meta"].get("replaced"))
     if en is None or en.get("incomplete") or (force and lang == "en"):
         check()
         only = None
@@ -83,14 +92,15 @@ def generate(ref, lang, cfg, force=False, jobs=4, progress=lambda *a: None, log=
             store.apply_en(doc, en)
             only = {c["id"] for c in doc["chunks"] if c["id"] not in en["chunks"] or
                     any(u not in en["units"] for u in c["units"]) or c["id"] in en.get("scope_partial", [])}
-        ladder.build(doc, task(cfg, "ladder"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("ladder", a, b), force=force, stop=stop, only=only)
+        again = force and not (replaced and en is None)
+        ladder.build(doc, task(cfg, "ladder"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("ladder", a, b), force=again, stop=stop, only=only)
         if only is not None:
             for uid, z in en["units"].items():
                 if uid in doc["units"] and doc["units"][uid]["chunk"] not in only:
                     doc["units"][uid]["lad"] = z
         check()
         progress("links", 0, 1)
-        links.build(doc, task(cfg, "links"), cache, log=log, force=force)
+        links.build(doc, task(cfg, "links"), cache, log=log, force=again)
         store.save_en(doc, model)
         en = store.read(pid, "en")
     else:
@@ -104,12 +114,20 @@ def generate(ref, lang, cfg, force=False, jobs=4, progress=lambda *a: None, log=
                 store.apply_tr(doc, lang, tr)
                 only = {c["id"] for c in doc["chunks"] if c["id"] not in tr["chunks"] or
                         any(u not in tr["units"] for u in c["units"]) or c["id"] in tr.get("scope_partial", [])}
-            translate.build(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("translate", a, b), force=force, stop=stop, only=only)
+            again = force and not (replaced and tr is None)
+            translate.build(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("translate", a, b), force=again, stop=stop, only=only)
             if only is not None:
                 for uid, z in tr["units"].items():
                     if uid in doc["units"] and doc["units"][uid]["chunk"] not in only:
                         doc["units"][uid].setdefault("tr", {})[lang] = z
             store.save_tr(doc, lang, en["version"], model)
+        elif cfg is not None:
+            store.apply_tr(doc, lang, tr)
+            if translate.gaps(doc, lang):   # paragraphs it was stored without (a call that failed): asked for now
+                check()
+                translate.fill(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("translate", a, b), stop=stop)
+                was = tr.get("model") or model
+                store.save_tr(doc, lang, en["version"], was if was == model else f"{was} + {model}")
     progress("done", 1, 1)
     return pid
 

@@ -2,22 +2,32 @@
 
   GET  /                      landing: paste a link, pick a language, the list of papers
   GET  /p/<id>?lang=xx        a paper in the reader
-  GET  /api/papers            the papers on disk, each with when it came in and was last opened (library.py)
+  GET  /api/papers            the papers on disk, each with when it came in and was last opened (library.py), and its
+                              citekey when it was read from a Zotero item that has one (zotero.citekeys)
   GET  /api/jobs              generation jobs (queued, running, recently finished)
   POST /api/jobs/stop         {id}: stop a job: a queued one is dropped; a running one ends once the model calls under way
                               return (what they wrote is kept in the cache, so starting it again goes on from there)
   POST /api/generate          {paper, lang, force}: queue a generation; one runs at a time. paper: an arXiv id or
                               link, a PMC or PPR id, a DOI (Europe PMC, epmc.py), or a stored document's id
-  POST /api/import            {name, text}: store a Markdown file as a paper (local.py); its id, to generate
-  GET  /api/models            saved configuration and the last model discovery results (no service probes)
+  POST /api/import            {name, text, id?}: store a Markdown file as a paper (local.py); its id, to generate. With
+                              id (a Markdown document stored before, md-…): its text replaced by this one under the same
+                              id, its notes found again in it and its levels set aside ({paper, title, replaced: true};
+                              not while it is being generated); then /api/generate with force folds it again, asking the
+                              model only for the sections that changed
+  GET  /api/models            saved configuration and the last model discovery results (no service probes); its "lang", the
+                              reader's language as the page last told it (null until it has), for other programs
+  GET  /api/langs             the languages a text can be read in: [{code, name}], each by its own name (langs.py)
   POST /api/models/refresh    refresh local model services in the background; GET /api/models reports progress/errors
   POST /api/models/select     {model, effort}: the model generations use; {task: "ask", model, effort}: the one questions
                               are answered with (none: the same) and its reasoning level (none: the default)
   POST /api/agents/scan       look for agents again (also done at startup)
   POST /api/providers/probe   {base, api_key | key, preset}: a provider's /models
   POST /api/providers/save    {key?, preset, name, base, api_key?, models}  ·  POST /api/providers/remove {key}
-  POST /api/settings          {use_thoughtdag_env}  ·  POST /api/settings/test {model?} or {task: "ask"}: one tiny call
+  POST /api/settings          {use_thoughtdag_env}, {pdf_tier}, {lang} (one of langs.py; else 400)  ·  POST /api/settings/test
+                              {model?} or {task: "ask"}: one tiny call
   GET  /api/notes/<id>        the reader's notes on a paper (docs/notes-format.md)
+  GET  /api/doc/<id>?lang=xx  the document in the TextFold format (docs/format.md), as `textfold get --json` writes it,
+                              from its layers alone: nothing is generated, no model is called
   POST /api/files             a file dropped on the landing, its bytes (X-Name, X-Lang): a PDF (X-Refs: the papers it
                               names), or a Word, PowerPoint, Excel, EPUB, HTML file or picture: through the PDF engine
   GET  /api/pdf/<id>          the paper's original PDF (arXiv, PubMed Central, bioRxiv), fetched once and kept (pdf.py)
@@ -28,9 +38,13 @@
                               with PDF.js, for the side-by-side view
   POST /api/ask               {paper, id, question, req}: the model answers a note's question; the answer is stored in it
   POST /api/ask/stop          {req}: that question stopped: its answer, when it comes, is not stored
-  POST /api/papers/delete     {paper}: move a paper to papers/.trash (not while it is being generated)
-  GET  /api/folders           the reader's folders and which document is in which (library.py)
-  POST /api/folders           {op: new | rename | delete | move, ...}: one change; the folders after it
+  POST /api/papers/delete     {paper}: move a paper to papers/.trash (not while it is being generated); the list. Or
+                              {papers: [ids]}: each that can go; {papers: the list, deleted: [ids], busy: [ids]}
+  POST /api/papers/restore    {papers: [ids]}: those deleted last back from papers/.trash, in their folders (the
+                              reader's Undo); {papers: the list, folders, restored: [ids]}
+  POST /api/papers/name       {paper, name}: what the reader calls it in the library ("": its own title again); the list
+  GET  /api/folders           the reader's folders (inside one another) and which document is in which (library.py)
+  POST /api/folders           {op: new | rename | delete | nest | move, ...}: one change; the folders after it
   GET  /api/bridge             the ChatGPT bridge (127.0.0.1:10531): running and its models, or what starting it needs
   POST /api/bridge/start       start it detached (bridges.py)
   POST /api/openrouter/start   {back}: the OpenRouter consent URL (OAuth PKCE); GET /oauth/openrouter is its return
@@ -41,8 +55,10 @@
   POST /api/zotero/read        {item: "<lib>/<key>", lang}: an item read. {ref} for its paper online, generated as a
                                link is; else its file, taken as a file dropped on the landing is (/api/files' reply)
 
-Loopback only, and POSTs from other origins are refused. Settings and keys live in
-~/.textfold/settings.json (mode 600), never in the project folder, which may be synced or shared.
+Loopback only, and POSTs from other origins are refused. A request addressed to any name but this computer's own
+(localhost, 127.0.0.1, [::1]) is answered 421 and nothing else: a web page that points its own domain at 127.0.0.1 (DNS
+rebinding) is the same origin as its requests to the browser, so only the name they carry tells them apart. Settings and
+keys live in ~/.textfold/settings.json (mode 600), never in the project folder, which may be synced or shared.
 """
 import base64
 import json
@@ -50,6 +66,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -62,9 +79,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from . import agents, bridges, build, docsite, engine, fetch, langs, library, llm, local, models, notes, office, pdf, pdfdoc, pdftext, pipeline, providers, store, zotero
+from . import __version__, agents, bridges, build, docsite, engine, fetch, fold, langs, library, llm, local, models, notes, office, pdf, pdfdoc, pdftext, pipeline, providers, store, zotero
 
-STATIC = {"theme.js": "text/javascript", "app.js": "text/javascript", "app.css": "text/css", "reader.js": "text/javascript",
+STATIC = {"documentation.js": "text/javascript", "app.js": "text/javascript", "app.css": "text/css", "reader.js": "text/javascript",
           "reader.css": "text/css", "i18n.js": "text/javascript", "tutorial.js": "text/javascript", "webmcp.js": "text/javascript"}
 # fonts and KaTeX, kept here so that no page asks another server for them (web/vendor)
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
@@ -145,6 +162,7 @@ def models_payload():
         "presets": providers.PRESETS[:-1] + [models.ANTHROPIC_PRESET, providers.PRESETS[-1]],
         "useThoughtdagEnv": s.get("use_thoughtdag_env", True), "thoughtdagEnv": providers.THOUGHTDAG_ENV.exists(),
         "pdfTier": s.get("pdf_tier") or "fast", "engine": engine.status(),
+        "lang": s.get("lang") if s.get("lang") in langs.LANGS else None,
     }
 
 
@@ -158,7 +176,7 @@ class Jobs:
         self.pending = {}  # files that wait for the engine to be installed: pid -> (file, name, lang)
         for side in (store.DATA / "uploads").glob("*.json"):   # (kept beside each, so a restart forgets none)
             try:
-                w = json.loads(side.read_text(encoding="utf-8"))
+                w = json.loads(store.read_text(side))
                 f = side.parent / Path(w.get("file") or side.stem + ".pdf").name
                 if f.exists() and not (store.pdir(f.stem) / "meta.json").exists():
                     self.pending[f.stem] = (str(f), w["name"], w["lang"])
@@ -237,7 +255,7 @@ class Jobs:
             if job["kind"] == "generate" and stage not in ("queued", "fetch") and (store.pdir(job["pid"]) / "meta.json").exists():
                 if not job.get("title"):   # a new paper's title, once it is parsed
                     try:
-                        job["title"] = json.loads((store.pdir(job["pid"]) / "meta.json").read_text(encoding="utf-8"))["title"]
+                        job["title"] = json.loads(store.read_text(store.pdir(job["pid"]) / "meta.json"))["title"]
                     except (OSError, ValueError, KeyError):
                         pass
                 if job.get("attach") and not job.get("attached"):   # the reader's own copy of an online paper's PDF
@@ -316,7 +334,7 @@ class Jobs:
             PAGES.pop(job["pid"], None)
 
     def _pdf_link(self, job, url=None):
-        url = url or (store.pdir(job["pid"]) / "url.txt").read_text(encoding="utf-8").strip()
+        url = url or store.read_text(store.pdir(job["pid"]) / "url.txt").strip()
         with urllib.request.urlopen(urllib.request.Request(url, headers=fetch.UA), timeout=90) as r:
             data = r.read(pdf.LIMIT + 1)
         if data[:5] != b"%PDF-" or len(data) > pdf.LIMIT:
@@ -477,23 +495,38 @@ PAGES = {}  # pid -> (signature of its layers and template, rendered page)
 RELAYOUT = threading.Lock()
 
 
+def assembled(pid, only=None):
+    """Assemble the document with its personal library name."""
+    doc = store.assemble(pid, only)
+    name = library.name_of(pid)
+    if name:
+        doc["meta"]["name"] = name
+    return doc
+
+
 def reader_page(pid, chapter=""):
     layers = store.pdir(pid) / "layers"
     sig = tuple(sorted((f.name, f.stat().st_mtime) for f in layers.glob("*.json"))) if layers.exists() else ()
-    sig += ((build.WEB / "template.html").stat().st_mtime,)  # a changed page template re-renders too
+    sig += ((build.WEB / "template.html").stat().st_mtime, library.name_of(pid))  # a changed page template re-renders too
     sig += tuple((f.name, f.stat().st_mtime_ns) for f in (store.pdir(pid) / "source.html", store.pdir(pid) / "correction.json",
                                                       store.pdir(pid) / "correction-request.json") if f.exists())
     key = pid + (":" + chapter if chapter else "")
     hit = PAGES.get(key)
     if not hit or hit[0] != sig:
-        hit = (sig, build.page(docsite.reader_document(store.assemble(pid), chapter), app=True))
+        hit = (sig, build.page(docsite.reader_document(assembled(pid), chapter), app=True))
         PAGES[key] = hit
     return hit[1]
 
 
 def listed():
-    """The papers for the list: those on disk, with when each came in and was last opened."""
-    return library.stamp(store.papers())
+    """The papers for the list: those on disk, with when each came in and was last opened, and the citekey of each one
+    read from a Zotero item that has one."""
+    rows = library.stamp(store.papers())
+    keys = zotero.citekeys()
+    for p in rows:
+        if keys.get(p["id"]):
+            p["citekey"] = keys[p["id"]]
+    return rows
 
 
 def landing_page(jobs):
@@ -503,9 +536,19 @@ def landing_page(jobs):
     data = models_payload()
     boot = {"papers": listed(), "folders": library.folders(), "jobs": jobs.list(), "model": data["selectedName"] or "",
             "askName": data["askName"], "modelData": data,
-            "bridge": data["bridge"], "langs": [[code, v[1]] for code, v in langs.LANGS.items()]}
+            "bridge": data["bridge"], "langs": langs.natives()}
     t = (build.WEB / "app.html").read_text(encoding="utf-8")
     return t.replace("{{HEAD}}", build.fonts_head(build.APP_ASSETS)).replace("{{BOOT}}", json.dumps(boot, ensure_ascii=False).replace("</", "<\\/"))
+
+
+LOCAL_NAMES = ("localhost", "127.0.0.1", "[::1]")
+
+
+def addressed_here(host):
+    """Whether a request's Host header names this computer (any port): what a page on another site cannot make its
+    browser send, even once its domain points at 127.0.0.1."""
+    m = re.fullmatch(r"(\[[0-9a-f:.]+\]|[^:\[\]]+)(?::\d{1,5})?", (host or "").strip().lower())
+    return bool(m) and m.group(1) in LOCAL_NAMES
 
 
 def make_handler(jobs):
@@ -526,6 +569,8 @@ def make_handler(jobs):
             self.send(code, json.dumps(obj, ensure_ascii=False))
 
         def do_GET(self):
+            if not addressed_here(self.headers.get("Host")):   # (DNS rebinding: the module's docstring)
+                return self.json({"error": "misdirected"}, 421)
             u = urlparse(self.path)
             try:
                 if u.path == "/":
@@ -578,6 +623,8 @@ def make_handler(jobs):
                     return self.json(listed())
                 if u.path == "/api/folders":
                     return self.json(library.folders())
+                if u.path == "/api/langs":
+                    return self.json([{"code": code, "name": name} for code, name in langs.natives().items()])
                 if u.path == "/api/jobs":
                     return self.json(jobs.list())
                 if u.path == "/api/documentation":
@@ -623,6 +670,14 @@ def make_handler(jobs):
                 m = re.fullmatch(r"/api/notes/([\w.-]+)", u.path)
                 if m and store.valid_id(m.group(1)) and (store.pdir(m.group(1)) / "meta.json").exists():
                     return self.json(notes.read(m.group(1)))
+                m = re.fullmatch(r"/api/doc/([\w.-]+)", u.path)   # (a document not folded yet: its local levels, said so)
+                if m:
+                    pid, lang = m.group(1), (parse_qs(u.query).get("lang") or ["en"])[0]
+                    if not (store.valid_id(pid) and (store.pdir(pid) / "meta.json").exists() and (store.pdir(pid) / "source.html").exists()):
+                        return self.json({"error": "no such paper"}, 404)
+                    if lang not in langs.LANGS:
+                        return self.json({"error": f"unknown language {lang}"}, 400)
+                    return self.json(fold.document(pid, lang))
                 m = re.fullmatch(r"/api/pdf/([\w.-]+)", u.path)
                 if m and store.valid_id(m.group(1)) and (store.pdir(m.group(1)) / "meta.json").exists():
                     f = pdf.path(m.group(1)) if pdf.has_source(m.group(1)) else None
@@ -636,6 +691,8 @@ def make_handler(jobs):
                 self.json({"error": str(e)}, 500)
 
         def do_POST(self):
+            if not addressed_here(self.headers.get("Host")):
+                return self.json({"error": "misdirected"}, 421)
             u = urlparse(self.path)
             origin = self.headers.get("Origin")
             if origin and urlparse(origin).hostname not in ("localhost", "127.0.0.1"):
@@ -725,7 +782,7 @@ def make_handler(jobs):
                             return self.json(got)
                         if "ref" in got:   # generated as a pasted link is (from the page, which asks for a model first)
                             pid = store.resolve(got["ref"])
-                            zotero.link(lib, key, pid, got["title"])
+                            zotero.link(lib, key, pid, got["title"], got["record"])
                             return self.json({"ref": pid, "title": got["title"]})
                     except zotero.Off as e:
                         return self.json({"error": str(e)}, 503)
@@ -751,7 +808,7 @@ def make_handler(jobs):
                         return self.json({"error": "no such PDF"}, 404)
                     if not engine.where():
                         return self.json({"error": "needs-engine"}, 409)
-                    name = json.loads((store.pdir(pid) / "meta.json").read_text(encoding="utf-8")).get("source", {}).get("name") or "document.pdf"
+                    name = json.loads(store.read_text(store.pdir(pid) / "meta.json")).get("source", {}).get("name") or "document.pdf"
                     return self.json(jobs.convert(pid, src, name, body.get("lang") or "en", tier, replace=True))
                 if u.path == "/api/jobs/stop":
                     job = jobs.stop(body.get("id", ""))
@@ -760,17 +817,29 @@ def make_handler(jobs):
                     text, name = str(body.get("text") or ""), str(body.get("name") or "document.md")[:200]
                     if not text.strip():
                         return self.json({"error": "empty"}, 400)
+                    if body.get("id"):   # an edited text in place of the one stored (a note folded again where it is written)
+                        pid = str(body["id"])
+                        if any(j["pid"] == pid and j["status"] in ("queued", "running") for j in jobs.list()):
+                            return self.json({"error": "busy"}, 409)
+                        try:
+                            title = local.replace_text(pid, text, name if body.get("name") else None)
+                        except LookupError:
+                            return self.json({"error": "no such document"}, 404)
+                        except ValueError:
+                            return self.json({"error": "not-markdown"}, 400)
+                        PAGES.pop(pid, None)
+                        return self.json({"paper": pid, "title": title, "replaced": True})
                     try:
                         pid = local.import_text(text, name)
                     except ValueError:
                         return self.json({"error": "not-markdown"}, 400)
-                    return self.json({"paper": pid, "title": json.loads((store.pdir(pid) / "meta.json").read_text(encoding="utf-8"))["title"]})
+                    return self.json({"paper": pid, "title": json.loads(store.read_text(store.pdir(pid) / "meta.json"))["title"]})
                 if u.path == "/api/export":   # the paper as one file, saved by the reader for themself
                     pid, lang = str(body.get("paper") or ""), str(body.get("lang") or "en")
                     if not store.valid_id(pid) or not (store.pdir(pid) / "meta.json").exists():
                         return self.json({"error": "no such paper"}, 404)
                     kinds = {k for k in body.get("kinds") or [] if k in ("hl", "note", "ask")}
-                    doc = store.assemble(pid, only=[lang] if body.get("langs") == "current" else None)
+                    doc = assembled(pid, only=[lang] if body.get("langs") == "current" else None)
                     chosen = [n for n in notes.read(pid)["notes"] if notes.kind(n) in kinds]
                     saved = {"notes": chosen, "saved": uuid.uuid4().hex[:12], "lang": lang}
                     if body.get("pdf") and pdf.has_source(pid):   # the original beside it: the file, and PDF.js to show it
@@ -805,14 +874,35 @@ def make_handler(jobs):
                     callback = f"http://{self.headers.get('Host') or 'localhost:3017'}/oauth/openrouter"
                     return self.json({"url": bridges.openrouter_start(callback, str(body.get("back") or "/"), bool(body.get("desktop")))})
                 if u.path == "/api/papers/delete":
+                    many = isinstance(body.get("papers"), list)
+                    pids = [str(p) for p in body["papers"]] if many else [str(body.get("paper", ""))]
+                    there = [p for p in dict.fromkeys(pids) if store.valid_id(p) and (store.pdir(p) / "meta.json").exists()]
+                    live = {j["pid"] for j in jobs.list() if j["status"] in ("queued", "running")}
+                    if not many and not there:
+                        return self.json({"error": "no such paper"}, 404)
+                    if not many and there[0] in live:
+                        return self.json({"error": "busy"}, 409)
+                    deleted = [p for p in there if p not in live]
+                    for pid in deleted:   # (its place in the library goes with it, for an Undo)
+                        store.trash(pid, library.forget(pid))
+                        PAGES.pop(pid, None)
+                    if not many:
+                        return self.json(listed())
+                    return self.json({"papers": listed(), "deleted": deleted, "busy": [p for p in there if p in live]})
+                if u.path == "/api/papers/restore":
+                    pids = body.get("papers") if isinstance(body.get("papers"), list) else []
+                    restored = []
+                    for pid in dict.fromkeys(str(p) for p in pids):
+                        kept = store.untrash(pid)
+                        if kept is not None:
+                            library.remember(pid, kept)
+                            restored.append(pid)
+                    return self.json({"papers": listed(), "folders": library.folders(), "restored": restored})
+                if u.path == "/api/papers/name":
                     pid = str(body.get("paper", ""))
                     if not store.valid_id(pid) or not (store.pdir(pid) / "meta.json").exists():
                         return self.json({"error": "no such paper"}, 404)
-                    if any(j["pid"] == pid and j["status"] in ("queued", "running") for j in jobs.list()):
-                        return self.json({"error": "busy"}, 409)
-                    store.trash(pid)
-                    library.forget(pid)
-                    PAGES.pop(pid, None)
+                    library.name(pid, body.get("name"))
                     return self.json(listed())
                 if u.path == "/api/folders":
                     try:
@@ -896,6 +986,10 @@ def make_handler(jobs):
                     models.save_settings(s)
                     return self.json(models_payload())
                 if u.path == "/api/settings":
+                    if "lang" in body:   # the reader's language, which the page keeps itself: for other programs to read
+                        if body["lang"] not in langs.LANGS:
+                            return self.json({"error": f"unknown language {body['lang']}"}, 400)
+                        s["lang"] = body["lang"]
                     if "use_thoughtdag_env" in body:
                         s["use_thoughtdag_env"] = bool(body["use_thoughtdag_env"])
                     if body.get("pdf_tier") in engine.TIERS:
@@ -933,6 +1027,31 @@ def _quiet_children():
     subprocess.Popen.__init__ = quiet
 
 
+def announce(port):
+    """server.json in the data folder: where this server is, for the programs that work with it (an editor's plugin, a
+    script), which could not tell the desktop app's free port from a server run by hand on 3017. Replaced whole, so a
+    program reading it never sees half of it. A server ended outright (on Windows, the app's server.kill(), which sends
+    no signal) leaves it behind: its url then answers nothing."""
+    f = store.DATA / "server.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f"server.json.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"format": "textfold/server", "version": 1, "url": f"http://127.0.0.1:{port}", "port": port,
+                               "pid": os.getpid(), "textfold": __version__,
+                               "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, indent=2), encoding="utf-8")
+    os.replace(tmp, f)
+    return f
+
+
+def withdraw(f):
+    """server.json removed when this server stops, if it is still this one's: a server started since on the same
+    data folder has written its own, and that one stays."""
+    try:
+        if json.loads(f.read_text(encoding="utf-8")).get("pid") == os.getpid():
+            f.unlink()
+    except (OSError, ValueError):
+        pass
+
+
 def serve(port=3017):
     if os.name == "nt":
         _quiet_children()
@@ -940,8 +1059,21 @@ def serve(port=3017):
     # look for the agents on this computer while the server comes up
     threading.Thread(target=agents.scan, kwargs={"log": print}, daemon=True).start()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(jobs))
-    print(f"TextFold on http://localhost:{port}")
+    port = httpd.server_address[1]   # (the one given, or the free one the system chose for 0)
+
+    def killed(signum, frame):
+        # the desktop app's server.kill(): server.json goes, then the server, at once as before (stopping as ^C does
+        # would wait for the model calls under way, since Python's exit waits for a thread pool's work)
+        withdraw(f)
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+    f = announce(port)
     try:
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, killed)
+        print(f"TextFold on http://localhost:{port}")
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        withdraw(f)

@@ -26,6 +26,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+from unittest import mock
+
 from textfold import engine, models, pdfdoc, store, zotero, zotero_cache
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -236,7 +238,8 @@ class LibraryTest(Setup):
 
 class ReadTest(Setup):
     def test_an_arxiv_item_is_read_from_arxiv(self):
-        self.assertEqual(zotero.read("users/0", "ARXVKEY2"), {"ref": "2201.11903", "title": "Chain of thought"})
+        got = zotero.read("users/0", "ARXVKEY2")   # (with its record, kept with the paper it becomes)
+        self.assertEqual((got["ref"], got["title"], got["record"]["citekey"]), ("2201.11903", "Chain of thought", "wei2022"))
 
     def test_a_saved_page_is_its_file(self):
         got = zotero.read("users/0", "HTMLKEY2")
@@ -247,7 +250,8 @@ class ReadTest(Setup):
         self.assertEqual((got["name"], got["needs"], got["attachment"]), ("paper.pdf", "zotero-cache", "ATTPDFS2"))
 
     def test_a_doi_alone_is_read_online(self):
-        self.assertEqual(zotero.read("users/0", "DIGIKEY2")["ref"], "10.5555/only")
+        got = zotero.read("users/0", "DIGIKEY2")
+        self.assertEqual((got["ref"], got["record"]["doi"], got["record"]["citekey"]), ("10.5555/only", "10.5555/only", ""))
 
     def test_what_is_not_a_readable_file_is_not_read(self):
         for key in ("NTHGKEY2", "FAKEPDF2", "TRAVKEY2"):   # nothing; a "PDF" that is not one; a name out of storage/
@@ -277,6 +281,18 @@ class ReadTest(Setup):
                          ("A paper with its PDF", ["Lovelace, Ada"], "2024-05-01", "10.1234/abcd", "https://doi.org/10.1234/abcd", "Zotero · lovelace2024"))
         self.assertEqual(m["zotero"], {"library": "users/0", "item": "PDFSKEY2", "citekey": "lovelace2024"})
         self.assertFalse(zotero.apply("2201.11903"))   # a paper read online keeps its own record
+
+    def test_each_documents_citekey(self):
+        f = self.tmp / "zotero-citekeys.json"
+        with mock.patch.object(zotero, "_links_file", return_value=f):
+            self.assertEqual(zotero.citekeys(), {})   # (nothing read from Zotero yet)
+            zotero.link("users/0", "ARXVKEY2", "2201.11903", "Chain of thought", {"citekey": "wei2022"})
+            zotero.link("users/0", "HTMLKEY2", "doc-0123456789abcdef", "A saved page", {"citekey": ""})   # an item without one
+            zotero.link("users/0", "NTHGKEY2", "md-notes-1a2b3c", "Notes")   # linked before its record was kept
+            zotero.link("groups/42", "LINKKEY2", "2201.11903", "Chain of thought", {"citekey": "wei2022cot"})   # the same paper
+            self.assertEqual(zotero.citekeys(), {"2201.11903": "wei2022cot"})   # the last item read, as apply takes it
+            f.write_text("{half", encoding="utf-8")
+            self.assertEqual(zotero.citekeys(), {})
 
     def test_an_item_read_is_marked_while_its_document_is_here(self):
         (self.data / "papers" / "doc-0123456789abcdef").mkdir()
@@ -372,6 +388,17 @@ class ServerTest(Setup):
         finally:
             shutil.rmtree(data / 'llm-for-zotero-mineru', ignore_errors=True)
             (data / 'zotero.sqlite').unlink(missing_ok=True)
+
+    def test_a_document_read_from_an_item_is_listed_with_its_citekey(self):
+        self.assertEqual(self.call("/api/zotero/read", {"item": "users/0/ARXVKEY2", "lang": "en"})[0], 200)
+        for pid in ("2201.11903", "2512.23916"):   # as if generated since; the second never came from Zotero
+            d = self.data / "papers" / pid
+            d.mkdir()
+            self.addCleanup(shutil.rmtree, d)
+            (d / "meta.json").write_text(json.dumps({"id": pid, "title": pid}), encoding="utf-8")
+        listed = {p["id"]: p for p in self.call("/api/papers")[1]}
+        self.assertEqual(listed["2201.11903"]["citekey"], "wei2022")
+        self.assertNotIn("citekey", listed["2512.23916"])
 
     def test_refusals(self):
         self.assertEqual(self.call("/api/zotero/read", {"item": "users/0/NTHGKEY2"}), (400, {"error": "no-file"}))

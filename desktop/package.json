@@ -1,7 +1,7 @@
 {
   "name": "textfold-desktop",
   "private": true,
-  "version": "0.10.11",
+  "version": "0.10.22",
   "description": "TextFold as an app: the local server and the reader in one window",
   "license": "Apache-2.0",
   "author": "Xia Chen",
@@ -9,6 +9,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test links.test.js",
     "payload": "node scripts/prepare-payload.mjs",
     "dist:mac": "node scripts/prepare-payload.mjs darwin arm64 && electron-builder --mac dmg zip --arm64 --publish never",
     "dist:mac:x64": "node scripts/prepare-payload.mjs darwin x64 && electron-builder --mac dmg zip --x64 --publish never",
@@ -28,6 +29,7 @@
     },
     "files": [
       "main.js",
+      "links.js",
       "preload.js",
       "splash.html",
       "package.json"
@@ -36,6 +38,15 @@
       {
         "from": "payload",
         "to": "payload"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "TextFold link",
+        "schemes": [
+          "textfold"
+        ],
+        "role": "Viewer"
       }
     ],
     "mac": {
@@ -66,6 +77,8 @@
       "target": "nsis"
     },
     "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
       "artifactName": "${productName}-win-${arch}-setup.${ext}",
       "shortcutName": "TextFold",
       "uninstallDisplayName": "TextFold"

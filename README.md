@@ -20,7 +20,7 @@
 </picture>
 
 **Paste a link:** any web page · arXiv · PubMed Central · bioRxiv · medRxiv · Wikipedia · GitHub<br>
-**Drop a file:** PDF · Word · PowerPoint · Excel · EPUB · HTML · CSV · pictures · Markdown · text
+**Drop files, one or several:** PDF · Word · PowerPoint · Excel · EPUB · HTML · CSV · pictures · Markdown · text
 
 **[Try the demo →](https://chenxiachan.github.io/textfold/gallery/)** or **[download the app ↓](#get-started)** · [What's new ↓](#whats-new)
 
@@ -63,7 +63,7 @@ Your agent writes more than you have time to read. A [Claude Code mod](https://c
 - **Ask AI about exactly what you read.** Select a passage, or ask about the whole text. The answer comes structured: the short answer first, then the evidence, each point citing the paragraph it rests on, one click away.
 - **Notes that zoom with the text.** Highlight and write in the margin; what you marked stays as you zoom out, and is saved with the page.
 
-- **Your language.** Twelve languages, translated sentence by sentence, with every formula as typeset.
+- **Your language.** Read in many languages, translated sentence by sentence, with every formula as typeset.
 
 - **Your library, in order.** Search it with ⌘K, keep documents in folders (drag one in, or right-click it), and list it by kind, by when each came in, or by when you last opened it.
 
@@ -134,7 +134,7 @@ TextFold uses a model you already have, and there is no account to create. It lo
 
 | You have | What to do |
 |---|---|
-| Claude Code, Codex or Pi | Nothing. TextFold finds it and uses it. |
+| Claude Code, Codex, Pi or WorkBuddy | Nothing. TextFold finds it and uses it. WorkBuddy (experimental) brings its models, on your WorkBuddy sign-in; CodeBuddy's own CLI works too. |
 | A ChatGPT plan | Click **Use my ChatGPT plan**. A small bridge starts on your computer and signs in with your account (needs Node.js). |
 | Nothing yet | Click **OpenRouter in one click**. Authorize once, and free models are ready. |
 | An API key | **Settings › Add provider**: Anthropic, OpenAI, DeepSeek, Qwen, Zhipu GLM, Kimi, MiniMax, Google, Ollama, or any OpenAI-compatible endpoint. |
@@ -147,14 +147,19 @@ Your questions can go to a stronger model than the one that writes the levels: *
 |---|---|
 | Pinch, or ⌘ / Ctrl + scroll | zoom around the pointer |
 | `1` to `5` | jump to a level |
+| **Cards** or **Map**, beside the levels at Topic | the sections and their topics as cards, or as a mind map |
 | Click a paragraph | open just that paragraph |
 | Click a figure | see it enlarged |
 | **Original**, at the top | read beside the paper's PDF |
-| **Save**, at the top | keep the page as one file, or only your notes |
+| **Save**, at the top | keep the page as one file, as Markdown at the level you read, or only your notes |
+| **Aa**, at the top | light or dark, the default or paper style, the text's size, serif or sans-serif, the line spacing, the column's width, and which margins show |
+| `F` | focus: the text alone, the bars back at the screen's edge |
 | Select text | highlight, write a note, or ask |
 | **Ask the paper**, bottom right | ask about the whole text |
 | `L` | next language |
 | `⌘K` (Ctrl+K) or `/` | search your library |
+| ⌘ / Ctrl or Shift + click in the sidebar | pick several documents, to move into a folder or delete together |
+| The pin, at the top of the sidebar | keep the sidebar open beside the text |
 
 ## For agents and scripts
 
@@ -168,9 +173,13 @@ python3 -m textfold get report.pdf --json                       # the whole docu
 
 A document not folded yet is folded first, with the model you connected. Every line a model wrote is marked as such and anchored to the author's sentences it rests on: [docs/format.md](https://github.com/chenxiachan/textfold/blob/main/docs/format.md) describes the format, for any program that reads or writes folded text.
 
+A running TextFold (the app, or `python3 -m textfold serve`) says where it is in `server.json`, in its data folder (`~/Library/Application Support/TextFold` on a Mac, `%LOCALAPPDATA%\TextFold` on Windows, `~/.local/share/textfold` on Linux, the clone when run from one): `{"format": "textfold/server", "version": 1, "url": "http://127.0.0.1:<port>", "port": <port>, "pid": <pid>, "textfold": "<version>", "started": "<UTC time>"}`. The file goes when the server stops; one left behind (a server ended outright) names an address that answers nothing.
+
+An agent in a browser that offers WebMCP, a draft web standard (tried in Codex's own browser), finds TextFold's own operations on its pages as tools: it reads the passage you are reading or selected, and, when you ask, saves a note on an exact passage, imports a file or a Zotero item, or sorts your folders. Nothing changes in a browser without it. [docs/webmcp.md](https://github.com/chenxiachan/textfold/blob/main/docs/webmcp.md) lists the tools. Contributed by [@peitianyi23-sudo](https://github.com/peitianyi23-sudo).
+
 ## Save a page
 
-**Save**, at the top of the reader, keeps a page as one HTML file that opens anywhere without a server: its levels, the notes you choose and, if you like, its original PDF to read beside it. It can also keep only your notes, as a page, a PDF, Markdown for Obsidian or JSON. From the command line, the page without your notes:
+**Save**, at the top of the reader, keeps a page as one HTML file that opens anywhere without a server: its levels, the notes you choose and, if you like, its original PDF to read beside it. It can also keep the whole text as Markdown at the level you are reading, your notes under their paragraphs (at Topic, an outline that a mind-map plugin draws), or only your notes, as a page, a PDF, Markdown for Obsidian or JSON. From the command line, the page without your notes:
 
 ```bash
 python3 -m textfold export 2512.23916
@@ -201,7 +210,7 @@ claude plugin install textfold@textfold
 | **1** | **Full** | every word Claude wrote |
 | **2** | **Brief** | each point, with the reason behind it |
 | **3** | **Points** | just the points, at a glance |
-| **4** | **Outline** | the map of a long reply: its sections, and what each one says |
+| **4** | **Outline** | the map of a long reply: its sections, and what each one says (a reply without headings shows its points) |
 | **5** | **Gist** | the answer, in one sentence |
 
 Type the digit while the prompt is empty, or pick a level in the row above the prompt. Short replies stay whole: one under about 80 words, or one a fold would barely shorten, always shows as written.
@@ -219,7 +228,7 @@ More in [plugins/textfold](https://github.com/chenxiachan/textfold/blob/main/plu
 
 <br>
 
-<img src="https://raw.githubusercontent.com/chenxiachan/textfold/main/docs/assets/pi.gif" width="880" alt="A reply in Pi folding a level at a time, from the full text down to its answer in one sentence, one key each">
+<img src="https://raw.githubusercontent.com/chenxiachan/textfold/main/docs/assets/pi-think.gif" width="880" alt="A coding turn in Pi, its thinking and its reply, folding a level at a time until each is one sentence, by key and by a click on the row">
 
 An extension puts the same five levels on every reply in [Pi](https://pi.dev). It needs Pi 1.2.0 or later, on Node 22.15 or later.
 
@@ -228,7 +237,7 @@ git clone https://github.com/chenxiachan/textfold.git
 pi install ./textfold/plugins/pi-textfold
 ```
 
-Hold Alt and type the digit, or type `/fold` and a level: `/fold 3`, `/fold points`, `/fold off`. Every reply folds in place, the earlier ones too, and the row above the prompt marks the level you read at. It folds with the mod's own engine, so a reply reads the same at each level in Claude Code and in Pi.
+Hold Alt and type the digit, click a level in the row above the prompt, or type `/fold` and a level: `/fold 3`, `/fold points`, `/fold off`. Every reply folds in place, the earlier ones too, and so does the model's thinking, so a long coding turn reads in a few lines. The level stays with the session, and `/fold calibrate` teaches the keys on any keyboard. On a Mac, let the terminal send Option as Meta, or Option+1 types ¡. It folds with the mod's own engine, so a reply reads the same at each level in Claude Code and in Pi.
 
 More in [plugins/pi-textfold](https://github.com/chenxiachan/textfold/blob/main/plugins/pi-textfold/README.md). Contributed by [@jlamweil](https://github.com/jlamweil).
 
@@ -236,6 +245,14 @@ More in [plugins/pi-textfold](https://github.com/chenxiachan/textfold/blob/main/
 
 ## What's new
 
+- **October 21, 2026: a reader to stay in.** **Aa** has light or dark (or your system's) and a paper style, quieter than white, for either; and the line spacing. A text opens where you left it, with a line under the top bar for how far in you are. `F` leaves the text alone on the screen. The sidebar can be pinned beside the text.
+- **October 21, 2026: tools for an agent in your browser.** In a browser that offers WebMCP, an agent finds TextFold's own operations as tools: it reads the passage you selected and, when you ask, saves a note on it, imports a file or a Zotero item, or sorts your folders. [The tools](https://github.com/chenxiachan/textfold/blob/main/docs/webmcp.md). Thanks to [@peitianyi23-sudo](https://github.com/peitianyi23-sudo).
+- **October 21, 2026: Topic as a mind map.** At Topic, **Map** beside the levels draws the sections and their topics as a mind map: click a topic to read its paragraph, click a section to fold it. Headings stand apart more clearly, **Aa** can hide the margins (the links, the AI answers, your notes), and **Save** keeps the whole text as Markdown at the level you read. On Windows, the installer asks where to install.
+- **October 20, 2026: your type, and several documents at once.** **Aa** at the top sets the text's size, the column's width and serif or sans-serif, for every text. In the sidebar, ⌘-click (Ctrl-click) or Shift-click picks several documents to move into a folder or delete together, and a delete can be undone for a few seconds.
+- **October 20, 2026: several files at once.** Drop or choose several files together: they are read, and their levels written, one after another while you go on reading, and the sidebar shows each.
+- **October 20, 2026: TextFold and Obsidian.** [TextFold Bridge](https://github.com/adalach/obsidian-textfold-bridge), an Obsidian plugin, links your notes to places in TextFold: a paragraph, a section, a note. Drag a paragraph, a section or a selection from the reader into a note and it keeps a link back to where it came from. A note of your own folds at the five levels inside Obsidian, and after an edit it folds again in place, its comments found again in the new text. Thanks to [@adalach](https://github.com/adalach).
+- **October 20, 2026: Pi folds the thinking too.** In Pi, the model's reasoning folds with its reply, so a long coding turn reads in a few lines. Click a level in the row to fold, keep your level when you resume a session, and teach the keys once with `/fold calibrate` on any keyboard. Thanks to [@jlamweil](https://github.com/jlamweil).
+- **October 19, 2026: more languages to read in.** Swedish, Danish, Norwegian, Finnish, Dutch, Polish, Czech, Ukrainian, Turkish, Indonesian and Vietnamese join the languages a text can be read in. Where the interface has no words for a language, it is in English. Thanks to [@Kullenej](https://github.com/Kullenej).
 - **October 15, 2026: Pi's replies fold too.** [An extension for Pi](https://github.com/chenxiachan/textfold/blob/main/plugins/pi-textfold/README.md) puts the five levels on every reply, with the same fold as in Claude Code. Thanks to [@jlamweil](https://github.com/jlamweil).
 - **October 15, 2026: PDFs open without the engine.** A PDF with its own text, as most papers have, opens at once, its figures cut from the page; only a scan still needs the PDF engine. An arXiv paper with no HTML version is read from its PDF. Thanks to [@sylvainHellin](https://github.com/sylvainHellin).
 - **October 15, 2026: your library, and your questions.** Search the library, keep documents in folders, and list them by when they came in or were last opened. A question has its own send and stop, any turn of a conversation can be deleted, and questions can go to a stronger model than the one that writes the levels. Thanks to [@suhyungJang](https://github.com/suhyungJang).
@@ -272,6 +289,9 @@ More in [plugins/pi-textfold](https://github.com/chenxiachan/textfold/blob/main/
 <a href="https://github.com/Kullenej" title="@Kullenej"><img src="https://github.com/Kullenej.png?size=80" width="40" height="40" alt="@Kullenej" /></a>
 <a href="https://github.com/666xz666" title="@666xz666"><img src="https://github.com/666xz666.png?size=80" width="40" height="40" alt="@666xz666" /></a>
 <a href="https://github.com/peitianyi23-sudo" title="@peitianyi23-sudo"><img src="https://github.com/peitianyi23-sudo.png?size=80" width="40" height="40" alt="@peitianyi23-sudo" /></a>
+<a href="https://github.com/mcardZH" title="@mcardZH"><img src="https://github.com/mcardZH.png?size=80" width="40" height="40" alt="@mcardZH" /></a>
+<a href="https://github.com/momoko-sketch" title="@momoko-sketch"><img src="https://github.com/momoko-sketch.png?size=80" width="40" height="40" alt="@momoko-sketch" /></a>
+<a href="https://github.com/Knoety" title="@Knoety"><img src="https://github.com/Knoety.png?size=80" width="40" height="40" alt="@Knoety" /></a>
 
 Contributions are welcome: start with [CONTRIBUTING.md](https://github.com/chenxiachan/textfold/blob/main/CONTRIBUTING.md).
 

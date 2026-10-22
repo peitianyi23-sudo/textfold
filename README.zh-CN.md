@@ -20,7 +20,7 @@
 </picture>
 
 **粘贴链接：** 任意网页 · arXiv · PubMed Central · bioRxiv · medRxiv · 维基百科 · GitHub<br>
-**拖入文件：** PDF · Word · PowerPoint · Excel · EPUB · HTML · CSV · 图片 · Markdown · 纯文本
+**拖入文件（一个或多个）：** PDF · Word · PowerPoint · Excel · EPUB · HTML · CSV · 图片 · Markdown · 纯文本
 
 **[试用演示 →](https://chenxiachan.github.io/textfold/gallery/)** 或者 **[下载软件 ↓](#开始使用)** · [最新 ↓](#最新)
 
@@ -63,7 +63,7 @@ Agent 写的，总比你有空读的多。一个 [Claude Code mod](https://code.
 - **针对内容，结构化地问 AI。** 选中一段，或者就全文提问。回答先给结论，再列依据，每条依据都标出原文段落，点一下就到。
 - **笔记跟着缩放。** 在页边高光、写笔记，缩小时标过的内容依然在，也会和整页一起保存。
 
-- **用你的语言读。** 十二种语言，逐句翻译，公式保持原样。
+- **用你的语言读。** 支持多种语言，逐句翻译，公式保持原样。
 
 - **你的文献库，井井有条。** 用 ⌘K 搜索；建文件夹整理文档，拖进去或者右键移进去；按类型、添加时间或最近打开排序。
 
@@ -134,7 +134,7 @@ TextFold 用你已有的模型，不需要注册账号。启动时它会自己�
 
 | 你有 | 怎么做 |
 |---|---|
-| Claude Code、Codex 或 Pi | 什么都不用做，TextFold 会自动找到并使用。 |
+| Claude Code、Codex、Pi 或 WorkBuddy | 什么都不用做，TextFold 会自动找到并使用。WorkBuddy（试验）用你登录的账号和它的模型；单独安装的 CodeBuddy 命令行也可以。 |
 | ChatGPT 订阅 | 点 **使用我的 ChatGPT 订阅**。电脑上会启动一个小的本地桥，用你的账号登录（需要 Node.js）。 |
 | 什么都还没有 | 点 **OpenRouter 一键授权**。授权一次，免费模型马上可用。 |
 | 一个 API key | **设置 › 添加供应商**：Anthropic、OpenAI、DeepSeek、通义千问、智谱 GLM、Kimi、MiniMax、Google、Ollama，或任何 OpenAI 兼容接口。 |
@@ -147,14 +147,19 @@ TextFold 用你已有的模型，不需要注册账号。启动时它会自己�
 |---|---|
 | 双指捏合，或 ⌘ / Ctrl 加滚轮 | 围绕鼠标所在处缩放 |
 | `1` 到 `5` | 跳到某一层 |
+| 主题层缩放条旁的 **卡片** 或 **导图** | 用卡片或思维导图看各节和主题词 |
 | 点击某一段 | 只展开这一段 |
 | 点击图片 | 放大查看 |
 | 顶部的 **原文** | 对照原文 PDF 阅读 |
-| 顶部的 **保存** | 把整页存成一个文件，或者只存你的标注 |
+| 顶部的 **保存** | 把整页存成一个文件，或按当前层级存成 Markdown，或者只存你的标注 |
+| 顶部的 **Aa** | 选浅色或深色、默认或纸张风格，调字号、字体、行距、栏宽，选页边显示哪些内容 |
+| `F` | 专注模式：只留正文，各栏在屏幕边缘出现 |
 | 选中文字 | 高光、写笔记或追问 |
 | 右下角 **问全文** | 就整篇提问 |
 | `L` | 切换到下一种语言 |
 | `⌘K`（Ctrl+K）或 `/` | 搜索文献库 |
+| 在侧栏里 ⌘ / Ctrl 或 Shift 加点击 | 选中多篇，一起移进文件夹或删除 |
+| 侧栏顶部的图钉 | 让侧栏一直开在正文旁边 |
 
 ## 给 agent 和脚本用
 
@@ -168,9 +173,13 @@ python3 -m textfold get report.pdf --json                       # 整份文档�
 
 还没折叠过的文档会先用你连接的模型折叠。模型写的每一行都标明是模型写的，并且指回它依据的作者原句：[docs/format.md](https://github.com/chenxiachan/textfold/blob/main/docs/format.md) 说明了这个格式，任何读写折叠文本的程序都可以用。
 
+运行中的 TextFold（应用，或 `python3 -m textfold serve`）会在数据文件夹的 `server.json` 里写下自己在哪里（Mac 上是 `~/Library/Application Support/TextFold`，Windows 上是 `%LOCALAPPDATA%\TextFold`，Linux 上是 `~/.local/share/textfold`，从克隆的仓库运行时就是仓库本身）：`{"format": "textfold/server", "version": 1, "url": "http://127.0.0.1:<port>", "port": <port>, "pid": <pid>, "textfold": "<version>", "started": "<UTC time>"}`。服务器停止时这个文件随之删除；留下来的文件（服务器被直接结束时）指向的地址不会再有回应。
+
+在支持 WebMCP（一个还在起草的网页标准，已在 Codex 自带的浏览器里试过）的浏览器里，agent 能在 TextFold 的页面上找到它自己的操作，当作工具来用：读你正在读或选中的段落；在你要求时，在一段确切的原文上存笔记、导入文件或 Zotero 条目、整理文件夹。不支持的浏览器一切照旧。工具列表见 [docs/webmcp.md](https://github.com/chenxiachan/textfold/blob/main/docs/webmcp.md)。由 [@peitianyi23-sudo](https://github.com/peitianyi23-sudo) 贡献。
+
 ## 保存一页
 
-阅读页顶部的 **保存** 把一页存成一个 HTML 文件，不需要服务器，在哪里都能打开：各个层级、你选的标注，还可以带上原文 PDF 在左边对照。也可以只存你的标注，存成网页、PDF、Obsidian 用的 Markdown 或 JSON。命令行也能导出这一页，只是不带你的标注：
+阅读页顶部的 **保存** 把一页存成一个 HTML 文件，不需要服务器，在哪里都能打开：各个层级、你选的标注，还可以带上原文 PDF 在左边对照。也可以按正在读的层级把整篇存成 Markdown，标注放在各自段落下面（在主题层存就是一份大纲，导图插件能直接画出来）；或者只存你的标注，存成网页、PDF、Obsidian 用的 Markdown 或 JSON。命令行也能导出这一页，只是不带你的标注：
 
 ```bash
 python3 -m textfold export 2512.23916
@@ -201,7 +210,7 @@ claude plugin install textfold@textfold
 | **1** | **Full** | Claude 写的每一个字 |
 | **2** | **Brief** | 每个要点，连同背后的理由 |
 | **3** | **Points** | 只看要点，一眼扫完 |
-| **4** | **Outline** | 长回答的地图：有哪几节，每节讲了什么 |
+| **4** | **Outline** | 长回答的地图：有哪几节，每节讲了什么（没有标题的回答显示要点） |
 | **5** | **Gist** | 一句话的答案 |
 
 在提示框为空时输入数字，或者在提示框上方那一行里选一个层级。短回答保持原样：不到大约 80 个词（中文约 130 字），或者折叠后几乎不会变短的回答，总是原样显示。
@@ -219,7 +228,7 @@ claude plugin install textfold@textfold
 
 <br>
 
-<img src="https://raw.githubusercontent.com/chenxiachan/textfold/main/docs/assets/pi.gif" width="880" alt="Pi 里的一条回答逐级折叠，从全文一直折到一句话的答案，每级一个键">
+<img src="https://raw.githubusercontent.com/chenxiachan/textfold/main/docs/assets/pi-think.gif" width="880" alt="Pi 里的一轮编程对话，思考过程和回答一起逐级折叠，直到各剩一句，用按键，也用鼠标点级别行">
 
 一个扩展把同样的五个层级放到 [Pi](https://pi.dev) 的每条回答上。需要 Pi 1.2.0 或更新的版本，Node 22.15 或更新。
 
@@ -228,7 +237,7 @@ git clone https://github.com/chenxiachan/textfold.git
 pi install ./textfold/plugins/pi-textfold
 ```
 
-按住 Alt 再按数字，或者输入 `/fold` 加层级：`/fold 3`、`/fold points`、`/fold off`。每条回答都在原处折叠，之前的回答也一样；提示框上方那一行标出你正在读的层级。它用的就是 mod 的折叠引擎，所以同一条回答在 Claude Code 和 Pi 里每一级读到的都一样。
+按住 Alt 再按数字，点提示框上方那一行里的层级，或者输入 `/fold` 加层级：`/fold 3`、`/fold points`、`/fold off`。每条回答都在原处折叠，之前的回答也一样，模型的思考过程也一起折叠，很长的一轮编程对话几行就能读完。层级跟着会话保存，`/fold calibrate` 能在任何键盘上教会按键。在 Mac 上要让终端把 Option 当作 Meta，否则 Option+1 打出的是 ¡。它用的就是 mod 的折叠引擎，所以同一条回答在 Claude Code 和 Pi 里每一级读到的都一样。
 
 详见 [plugins/pi-textfold](https://github.com/chenxiachan/textfold/blob/main/plugins/pi-textfold/README.md)。由 [@jlamweil](https://github.com/jlamweil) 贡献。
 
@@ -236,6 +245,14 @@ pi install ./textfold/plugins/pi-textfold
 
 ## 最新
 
+- **2026 年 10 月 21 日：更适合长时间阅读。** **Aa** 里可以选浅色或深色（或跟随系统），再选一种比白底柔和的纸张风格，两者可以搭配；还能调行距。再打开一篇文档会回到上次读到的地方，顶栏下的细线显示读到了哪里。按 `F` 进入专注模式，屏幕上只留正文。侧栏可以固定在正文旁边。
+- **2026 年 10 月 21 日：给浏览器里的 agent 用的工具。** 在支持 WebMCP 的浏览器里，agent 能把 TextFold 自己的操作当作工具：读你选中的段落；在你要求时，在这段原文上存笔记、导入文件或 Zotero 条目、整理文件夹。[工具列表](https://github.com/chenxiachan/textfold/blob/main/docs/webmcp.md)。感谢 [@peitianyi23-sudo](https://github.com/peitianyi23-sudo)。
+- **2026 年 10 月 21 日：主题层可以看成思维导图。** 在主题层，缩放条旁的 **导图** 把各节和主题词画成一张思维导图：点主题词读那一段，点章节可以收起。标题层级更分明了；**Aa** 可以隐藏页边内容（段落关联、AI 问答、你的笔记）；**保存** 可以按正在读的层级把整篇存成 Markdown。Windows 安装时可以选安装目录。
+- **2026 年 10 月 20 日：字号、栏宽和字体；侧栏多选。** 顶部的 **Aa** 可以调字号和栏宽，选衬线或无衬线，对所有文档都生效。在侧栏里 ⌘ 点击（Ctrl 点击）或 Shift 点击可以选中多篇，一起移进文件夹或删除；删除后几秒内可以撤销。
+- **2026 年 10 月 20 日：一次拖入多个文件。** 一次拖入或选择多个文件，它们会一个接一个读取并生成层级，你可以接着读别的，侧栏里能看到每一个的进度。
+- **2026 年 10 月 20 日：TextFold 和 Obsidian。** Obsidian 插件 [TextFold Bridge](https://github.com/adalach/obsidian-textfold-bridge) 让笔记里的链接直接指到 TextFold 里的某一段、某一节或某条标注。把阅读器里的段落、整节或选中的文字拖进笔记，会带上回到原处的链接。你自己的笔记也能在 Obsidian 里按五个层级折叠，改过之后原地重新折叠，标注会在新文字里找回原来的位置。感谢 [@adalach](https://github.com/adalach)。
+- **2026 年 10 月 20 日：Pi 的思考过程也能折叠了。** 在 Pi 里，模型的思考过程和回答一起折叠，很长的一轮编程对话几行就能读完。点一下级别行就能折叠，接着上次的会话时级别不变，用 `/fold calibrate` 教一次按键，任何键盘都能用。感谢 [@jlamweil](https://github.com/jlamweil)。
+- **2026 年 10 月 19 日：更多阅读语言。** 新增瑞典语、丹麦语、挪威语、芬兰语、荷兰语、波兰语、捷克语、乌克兰语、土耳其语、印尼语和越南语。界面没有这种语言时显示英文。感谢 [@Kullenej](https://github.com/Kullenej)。
 - **2026 年 10 月 15 日：Pi 的回答也能折叠了。** [Pi 扩展](https://github.com/chenxiachan/textfold/blob/main/plugins/pi-textfold/README.md) 把五个层级放到每条回答上，折法和 Claude Code 里一样。感谢 [@jlamweil](https://github.com/jlamweil)。
 - **2026 年 10 月 15 日：不装 PDF 引擎也能读 PDF。** 自带文字的 PDF（大多数论文都是）直接打开，图从原页上裁出来；只有扫描件还需要 PDF 引擎。没有 HTML 版本的 arXiv 论文改读它的 PDF。感谢 [@sylvainHellin](https://github.com/sylvainHellin)。
 - **2026 年 10 月 15 日：你的文献库和你的提问。** 文献库可以搜索、建文件夹，按添加时间或最近打开排序。提问有了发送和停止键，对话里任何一轮都可以删掉，回答问题还可以用比生成层级更强的模型。感谢 [@suhyungJang](https://github.com/suhyungJang)。
@@ -272,6 +289,9 @@ pi install ./textfold/plugins/pi-textfold
 <a href="https://github.com/Kullenej" title="@Kullenej"><img src="https://github.com/Kullenej.png?size=80" width="40" height="40" alt="@Kullenej" /></a>
 <a href="https://github.com/666xz666" title="@666xz666"><img src="https://github.com/666xz666.png?size=80" width="40" height="40" alt="@666xz666" /></a>
 <a href="https://github.com/peitianyi23-sudo" title="@peitianyi23-sudo"><img src="https://github.com/peitianyi23-sudo.png?size=80" width="40" height="40" alt="@peitianyi23-sudo" /></a>
+<a href="https://github.com/mcardZH" title="@mcardZH"><img src="https://github.com/mcardZH.png?size=80" width="40" height="40" alt="@mcardZH" /></a>
+<a href="https://github.com/momoko-sketch" title="@momoko-sketch"><img src="https://github.com/momoko-sketch.png?size=80" width="40" height="40" alt="@momoko-sketch" /></a>
+<a href="https://github.com/Knoety" title="@Knoety"><img src="https://github.com/Knoety.png?size=80" width="40" height="40" alt="@Knoety" /></a>
 
 欢迎贡献：先看 [CONTRIBUTING.md](https://github.com/chenxiachan/textfold/blob/main/CONTRIBUTING.md)。
 

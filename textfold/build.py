@@ -15,7 +15,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import store
+from . import langs, store
 from .fetch import fetch_images
 
 WEB = Path(__file__).resolve().parent / "web"   # the reader's pages, styles, scripts and vendor files
@@ -92,6 +92,7 @@ def payload(doc, app, katex=None, saved=None, pdf=None):
     doc = equations.reader_captions(doc)
     data = {k: doc[k] for k in ("meta", "atoms", "units", "chunks", "blocks", "bib", "edges", "alias")}
     data["app"] = app
+    data["langs"] = langs.natives()   # every language the text could be read in, by its own name (the menus)
     data["katex"] = katex   # where the reader finds KaTeX: a folder, "inside" the page, or nowhere (math stays as written)
     if pdf:   # a gallery's page: its PDF and PDF.js beside it ({"file", "pdfjs"}, relative to the page)
         data["pdfAt"] = pdf
@@ -192,18 +193,18 @@ def page(doc, app=False, assets=None, saved=None, pdf=None):
                   f'<ul>{detail}</ul></details><div id="pdf-scope-controls" hidden>{controls}</div></div></div>')
         t = t.replace('<div class="langpick">', banner + '<div class="langpick">')
     if app:
-        head = '<script src="/static/theme.js"></script>' + fonts_head(APP_ASSETS) + '<link rel="stylesheet" href="/static/reader.css"><link rel="stylesheet" href="/static/app.css">'
+        head = fonts_head(APP_ASSETS) + '<link rel="stylesheet" href="/static/reader.css"><link rel="stylesheet" href="/static/app.css">'
         scripts = ('<script src="/static/i18n.js"></script><script src="/static/tutorial.js"></script>' + original_label + '<script src="/static/reader.js"></script>'
-                   '<script src="/static/app.js"></script><script src="/static/webmcp.js"></script>')
+                   '<script src="/static/app.js"></script><script src="/static/documentation.js"></script><script src="/static/webmcp.js"></script>')
         side, cls, katex = '<aside id="sidebar" class="collapsed"></aside>', "app", APP_ASSETS + "katex/"
     else:
-        head = f"<script>{(WEB / 'theme.js').read_text(encoding='utf-8')}</script>" + fonts_head(assets) + f"<style>{(WEB / 'reader.css').read_text(encoding='utf-8')}</style>"
+        head = fonts_head(assets) + f"<style>{(WEB / 'reader.css').read_text(encoding='utf-8')}</style>"
         scripts = f"<script>{(WEB / 'i18n.js').read_text(encoding='utf-8')}</script>" + original_label + f"<script>{(WEB / 'reader.js').read_text(encoding='utf-8')}</script>"
         side, cls, katex = "", "static", (assets + "katex/") if assets else None
         if not assets and (_has_tex(doc) or (saved and saved.get("notes"))):   # (an answer's formulas need it too)
             head += _katex_inside()
             katex = "inside"
-    return (t.replace("{{TITLE}}", escape(doc["meta"]["title"])).replace("{{HEAD}}", head).replace("{{CLASS}}", cls)
+    return (t.replace("{{TITLE}}", escape(doc["meta"].get("name") or doc["meta"]["title"])).replace("{{HEAD}}", head).replace("{{CLASS}}", cls)
              .replace("{{SIDEBAR}}", side).replace("{{SCRIPTS}}", scripts).replace("{{DATA}}", payload(doc, app, katex, saved, pdf)))
 
 

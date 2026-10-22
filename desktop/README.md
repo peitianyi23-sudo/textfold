@@ -1,7 +1,7 @@
 # TextFold as an app
 
 The same local server and reader in one window, with its own Python, so a reader needs nothing installed. Agents
-on the computer (Claude Code, Codex, Pi), the ChatGPT bridge and API providers work as they do in the browser.
+on the computer (Claude Code, Codex, Pi, WorkBuddy), the ChatGPT bridge and API providers work as they do in the browser.
 What you read is kept where `python3 -m textfold serve` keeps it, so the two share one library: on a Mac
 `~/Library/Application Support/TextFold/`, on Windows `%LOCALAPPDATA%\TextFold\`. Settings and keys are in
 `~/.textfold/`. `TEXTFOLD_DATA` points the app at another folder, as it does the server.
@@ -23,6 +23,16 @@ at the bottom right of the page, in the reader's language. Nothing downloads unt
 changed, when the blockmap allows), and the new version installs when they click Restart, or the next time they quit.
 Settings shows the version and checks by hand. A copy run from the code (`npm start`) does not update itself.
 `TEXTFOLD_UPDATES=<url>` points the app at another folder of release files, for a test.
+
+## Links
+
+`textfold://open?paper=<document id>[&u=<paragraph id>[&to=<paragraph id>]][&s=<section id>][&n=<note id>[&t=<turn>]][&level=<full|brief|key|takeaway|topic>][&lang=<code>]`,
+its values URL-encoded, opens a document of the library in the window, at a paragraph (or the run of them from u to
+to) or a section and a level, or at a note (a conversation at one of its turns, counted from 0), in a language: another program (an editor's plugin) links to it so. A link with any part wrong is not followed;
+one to a document not in the library says so, with its id, and opens the library (`links.js`; `npm test` runs its tests, and `tests/test_desktop_links.py`
+keeps its ids, levels and languages the server's). Only the installed app claims the scheme: declared for macOS in
+`package.json` (`build.protocols`), and claimed when it starts, which Windows needs, since its installer registers none.
+A copy run from the code never claims it; a link on its command line still opens (`npm start -- "textfold://open?paper=2512.23916"`).
 
 ## Build
 

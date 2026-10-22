@@ -255,7 +255,7 @@ def read(lib, key, attachment="", select=False):
     if attachment:
         raise ValueError("bad-attachment")
     if it["arxiv"]:
-        return {"ref": it["arxiv"], "title": it["title"]}
+        return {"ref": it["arxiv"], "title": it["title"], "record": record_of(r, it)}
     for att in attachments:
         f = _file(lib, att)
         if f:
@@ -263,7 +263,7 @@ def read(lib, key, attachment="", select=False):
             return {"data": f.read_bytes(), "name": name, "refs": [it["doi"]] if it["doi"] else [], "title": it["title"],
                     "record": record_of(r, it)}
     if it["doi"]:
-        return {"ref": it["doi"], "title": it["title"]}
+        return {"ref": it["doi"], "title": it["title"], "record": record_of(r, it)}
     raise ValueError("no-file")
 
 
@@ -330,16 +330,31 @@ def links():
 
 def _link_data():
     try:
-        return json.loads(_links_file().read_text(encoding='utf-8'))
+        return json.loads(store.read_text(_links_file()))
     except (OSError, ValueError, KeyError, TypeError):
         return {}
+
+
+def citekeys():
+    """Each document's citekey, for the documents read from an item that has one: as the item's record has it, Zotero's
+    when the item was read (the last item read, when several became one document, as apply takes it)."""
+    try:
+        data = json.loads(store.read_text(_links_file()))
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for v in data.values() if isinstance(data, dict) else []:
+        rec = v.get("record") if isinstance(v, dict) else None
+        if isinstance(rec, dict) and rec.get("citekey") and isinstance(v.get("paper"), str):
+            out[v["paper"]] = rec["citekey"]
+    return out
 
 
 def link(lib, key, pid, title, record=None):
     f = _links_file()
     with _lock:
         try:
-            data = json.loads(f.read_text(encoding="utf-8"))
+            data = json.loads(store.read_text(f))
         except (OSError, ValueError):
             data = {}
         data[f"{lib}/{key}"] = {"paper": pid, "title": title, **({"record": record} if record else {}),
@@ -358,8 +373,8 @@ def apply(pid):
         return False
     mf = store.pdir(pid) / "meta.json"
     try:
-        data = json.loads(_links_file().read_text(encoding="utf-8"))
-        meta = json.loads(mf.read_text(encoding="utf-8"))
+        data = json.loads(store.read_text(_links_file()))
+        meta = json.loads(store.read_text(mf))
     except (OSError, ValueError):
         return False
     found = [(where, v) for where, v in data.items() if isinstance(v, dict) and v.get("paper") == pid and v.get("record")]

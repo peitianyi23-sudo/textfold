@@ -6,9 +6,16 @@
   const bootEl = document.getElementById('boot');
   const BOOT = bootEl ? JSON.parse(bootEl.textContent) : {};
   const readerEl = document.getElementById('paper-data');
-  const PAPER = readerEl ? JSON.parse(readerEl.textContent).meta : null;   // the paper open in the reader, if any
+  const DATA = readerEl ? JSON.parse(readerEl.textContent) : null;
+  const PAPER = DATA ? DATA.meta : null;   // the paper open in the reader, if any
   const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch { /* private window */ } } };
-  const SHORT = { en: 'EN', zh: '中', 'zh-Hant': '繁', ja: '日', ko: '한', es: 'ES', fr: 'FR', de: 'DE', pt: 'PT', it: 'IT', ru: 'RU', hi: 'हि', sv: 'SV', da: 'DA' };
+  // the brightness and the style chosen in a paper's Aa menu (reader.js, textfold.type), on the landing too
+  try {
+    const v = JSON.parse(store.get('textfold.type') || 'null') || {}, r = document.documentElement;
+    if (['light', 'dark'].includes(v.mode)) r.dataset.theme = v.mode;
+    if (v.style === 'paper') r.dataset.style = v.style;
+  } catch { /* (written by hand) */ }
+  const SHORT = { en: 'EN', zh: '中', 'zh-Hant': '繁', ja: '日', ko: '한', es: 'ES', fr: 'FR', de: 'DE', pt: 'PT', it: 'IT', ru: 'RU', hi: 'हि' };   // (any other: its code)
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
   const api = (path, body) => fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -43,27 +50,50 @@
     ? `<p class="st-note warn">${esc(T.bridge_failed.replace('{error}', st.error))}</p>`
     : st.login ? `<p class="st-note">${esc(T.bridge_login)} <a href="${esc(st.login)}" target="_blank" rel="noopener">${esc(T.bridge_login_open)}</a></p>` : '';
 
-  // the reader's language (settings; else the browser's): the interface speaks it, papers are read and made in it, and a
-  // switch of a paper's language is a switch of it (reader.js)
+  // the reader's language (settings; else the browser's): papers are read and made in it, the interface speaks it when it
+  // has the words (else English), and a switch of a paper's language is a switch of it (reader.js)
   const UI_KEY = 'pf-ui-lang';
-  let uiLang = [store.get(UI_KEY), I18N.guess()].find((l) => l && I18N.NATIVE[l]) || 'en';
-  function setUiLang(code) {
-    if (!I18N.NATIVE[code]) return;
-    uiLang = code;
+  const READ = BOOT.langs || (DATA && DATA.langs) || I18N.NATIVE;   // every language a text can be read in, by its own name
+  const nameOf = (code) => READ[code] || I18N.NATIVE[code] || code;
+  let readLang = [store.get(UI_KEY), I18N.guess(READ)].find((l) => l && READ[l]) || 'en';
+  let uiLang = I18N.uiFor(readLang);
+  // The page keeps the reader's language itself (UI_KEY). The server is told it too, when it changes, and as the landing
+  // opens while it has none (the settings' "lang"; they are every server's, so a page elsewhere never overwrites a
+  // choice): for the programs that work with TextFold (an editor's plugin), which cannot read this window's storage.
+  // Nothing here reads it back.
+  let told = modelData ? modelData.lang : undefined;
+  function tellLang(code) {
+    if (!code || code === told || !READ[code]) return;
+    told = code;
+    // (keepalive: a language just made is told as the page goes to it)
+    fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lang: code }), keepalive: true })
+      .then((r) => { if (!r.ok) told = undefined; }, () => { told = undefined; });
+  }
+  function setReaderLang(code) {
+    if (!READ[code]) return;
+    readLang = code;
+    uiLang = I18N.uiFor(code);
     store.set(UI_KEY, code);
+    tellLang(code);
     renderSidebar();
     if (landing) renderLanding();
     if (window.__reader && window.__reader.setUi) window.__reader.setUi(code);
     document.dispatchEvent(new Event('tf-lang'));   // (what else speaks it: the app's update)
   }
   let papers = BOOT.papers || [];
-  let folders = BOOT.folders || { folders: [], of: {} };   // the reader's folders, and which document is in which (folders.py)
+  let folders = BOOT.folders || { folders: [], of: {} };   // the reader's folders (each in its parent, or at the top), and which document is in which (library.py)
   let sbQuery = '';        // the sidebar's search, as typed
   let editing = null;      // a folder's name being written: 'new', or the folder's id
-  let dragging = null;     // the document being dragged to a folder
+  let dragging = null;     // the documents being dragged to a folder (one, or those picked)
+  let draggingFolder = null;   // the folder being dragged into another, or to the top
   let moving = null;       // the document a new folder is being named for (its menu's New folder…)
+  let within = null;       // the folder a new one is being named inside (its menu's New subfolder…); none: at the top
+  let renaming = null;     // the document whose name in the library is being written
   let menu = null;         // a folder's or a document's menu, while it is open
   let stale = false;       // the list as polled while a menu was open: drawn when it closes
+  const chosen = new Set();   // the documents picked to be moved or deleted together (⌘/Ctrl- or Shift-click, a row's Select)
+  let chosenAt = null;        // the one picked last: a Shift-click picks every row shown from it to the one clicked
+  const MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   const FOLDED = 'textfold.folded';   // the folders shut, kept for next time
   const SORT = 'textfold.sort';       // the list's order: 'kind' (the default), 'added' (when it came in) or 'opened' (last)
   const folded = new Set((store.get(FOLDED) || '').split(' ').filter(Boolean));
@@ -80,11 +110,15 @@
   const MARK = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect class="m1" x="2" y="3" width="16" height="2.4" rx="1.2"/><rect class="m2" x="2" y="8.8" width="11" height="2.4" rx="1.2"/><rect class="m3" x="2" y="14.6" width="5" height="2.4" rx="1.2"/></svg>';
   const BOOKS = '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3.5h3v13H4z"/><path d="M8.5 3.5h3v13h-3z"/><path d="M13 4.2l2.8-.7 2.6 12.3-2.8.7z"/></svg>';
   const LIST = '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5"/><path d="M7.5 3.5v13"/></svg>';
+  const PIN = '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><path class="pin-head" d="M7.2 2.8h5.6l-.9 4.6 2.9 3v1.4H5.2v-1.4l2.9-3z"/><path d="M10 11.8v5.4"/></svg>';
+  // the sidebar pinned beside a paper (below: setPinned), kept in this browser
+  const PIN_KEY = 'textfold.sbpin';
+  let pinned = store.get(PIN_KEY) === '1';
   const FOLDER = '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.6l1.8 2H16a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z"/></svg>';
   const FOLDER_NEW = '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.6l1.8 2H16a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z"/><path d="M10 8.5v5M7.5 11h5"/></svg>';
   const CHEV = '<svg class="sb-chev" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l4 4-4 4"/></svg>';
   // a paper opens in the reader's language, else the one last read in, else its first
-  const pick = (p) => [uiLang, store.get('dr-lang')].find((l) => l && p.langs.includes(l)) || p.langs[0] || 'en';
+  const pick = (p) => [readLang, store.get('dr-lang')].find((l) => l && p.langs.includes(l)) || p.langs[0] || 'en';
   const modelLabel = () => {   // and the one for questions, when it is another (its agent's name said once: Claude Code · Sonnet · answers: Opus)
     if (!askName) return modelName;
     const head = modelName.split(' · ')[0], short = askName.startsWith(`${head} · `) ? askName.slice(head.length + 3) : askName;
@@ -99,24 +133,30 @@
     return j.stopping ? T.stopping : `${T.stages[st] || (T.pstages || {})[st] || st}${j.total ? ` ${j.done}/${j.total}` : ''}`;
   };
   const stopBtn = (j, T) => `<button type="button" class="sb-stop" data-stop="${j.id}" title="${esc(T.stop)}" aria-label="${esc(T.stop)}"${j.stopping ? ' disabled' : ''}><i></i></button>`;
-  const progress = (j, T) => `<span class="sb-prog"><i style="width:${pct(j)}%"></i></span><span class="sb-stage">${esc(stageOf(j, T))}${j.lang ? ` · ${esc(I18N.NATIVE[j.lang])}` : ''}</span>`;
+  const progress = (j, T) => `<span class="sb-prog"><i style="width:${pct(j)}%"></i></span><span class="sb-stage">${esc(stageOf(j, T))}${j.lang ? ` · ${esc(nameOf(j.lang))}` : ''}</span>`;
   const jobName = (j, T) => (j.kind === 'install' ? T.engine : j.title || j.pid);
   let lastSidebar = '';
   function renderSidebar() {
     stale = false;
     const T = t();
     const listed = new Set(papers.map((p) => p.id));
+    for (const id of chosen) if (!listed.has(id)) chosen.delete(id);   // (deleted meanwhile)
     const pending = jobs.filter((j) => !listed.has(j.pid) && live(j));
     const item = (p) => {
       const j = jobFor(p.id);
-      const title = (p.titles && p.titles[uiLang]) || p.title;
-      const langs = p.langs.map((l) => `<span${l === uiLang ? ' class="on"' : ''}>${p.reading_mode === 'original' && l === 'en' ? (uiLang.startsWith('zh') ? '原文' : 'Original') : SHORT[l] || l}</span>`).join('');
+      const own = (p.titles && p.titles[readLang]) || p.title, title = p.name || own;
+      if (renaming === p.id) {
+        return `<div class="sb-row" data-pid="${p.id}" data-q="${esc(hay(p))}"><input class="sb-dname-in" value="${esc(title)}" placeholder="${esc(own)}" ` +
+          `aria-label="${esc(T.d_name)}" title="${esc(T.d_name)}" maxlength="200" spellcheck="false"></div>`;
+      }
+      const langs = p.langs.map((l) => `<span${l === readLang ? ' class="on"' : ''}>${p.reading_mode === 'original' && l === 'en' ? (uiLang.startsWith('zh') ? '原文' : 'Original') : SHORT[l] || l.toUpperCase()}</span>`).join('');
       const active = PAPER && PAPER.id === p.id;
-      const unfinished = !j && !p.langs.length && !p.readable;
-      return `<div class="sb-row" data-pid="${p.id}" data-q="${esc(hay(p))}"><a class="sb-item${active ? ' active' : ''}${unfinished ? ' unfinished' : ''}" href="${unfinished ? '#' : `/p/${p.id}?lang=${pick(p)}`}"${unfinished ? ` data-resume="${p.id}"` : ''} title="${esc(p.title)}">
+      const unfinished = !j && !p.langs.length && !p.readable;   // stopped (or failed) before its first language: a click goes on with it
+      return `<div class="sb-row${chosen.has(p.id) ? ' chosen' : ''}" data-pid="${p.id}" data-q="${esc(hay(p))}"><a class="sb-item${active ? ' active' : ''}${unfinished ? ' unfinished' : ''}" href="${unfinished ? '#' : `/p/${p.id}?lang=${pick(p)}`}"${unfinished ? ` data-resume="${p.id}"` : ''} title="${esc(p.title)}">
         <span class="sb-t">${esc(title)}</span><span class="sb-m"><span class="sb-id">${p.id}</span><span class="sb-langs">${langs}</span></span>
         ${j ? `${p.readable ? `<span class="sb-stage">${esc(T.read_first)}</span>` : ''}${progress(j, T)}` : unfinished ? `<span class="sb-stage">${esc(T.unfinished)}</span>` : ''}</a>` +
-        (j ? stopBtn(j, T) : `<button type="button" class="sb-del" data-del="${p.id}" title="${esc(T.del_paper)}" aria-label="${esc(T.del_paper)}">×</button>`) + '</div>';
+        (j ? stopBtn(j, T) : chosen.size ? '<span class="sb-check" aria-hidden="true"></span>'
+          : `<button type="button" class="sb-del" data-del="${p.id}" title="${esc(T.del_paper)}" aria-label="${esc(T.del_paper)}">×</button>`) + '</div>';
     };
     // papers, Wikipedia articles, GitHub READMEs and documents of one's own, each under its name when there is more than one kind
     // (a file read from a Zotero item is among the papers: Zotero says what it is)
@@ -125,7 +165,7 @@
     // folders too; by kind, in the server's order (the latest layer first)
     const order = sortOrder(), when = (p) => (order === 'opened' ? p.opened || p.added : p.added) || p.updated;
     const docs = order === 'kind' ? papers : [...papers].sort((a, b) => when(b) - when(a));
-    // the reader's folders first (one level; a document in one at most), then the documents in none
+    // the reader's folders first (inside one another; a document in one at most), then the documents in none
     const fs = folders.folders, loose = docs.filter((p) => !folders.of[p.id]);
     const today = new Date().setHours(0, 0, 0, 0);
     const since = (p) => { const at = when(p) * 1000; return at >= today ? 0 : Date.now() - at < 7 * 864e5 ? 1 : Date.now() - at < 30 * 864e5 ? 2 : 3; };
@@ -133,26 +173,31 @@
       : [['paper', T.papers], ['wiki', T.g_wiki], ['gh', 'GitHub'], ['web', T.g_web], ['doc', T.g_docs]].map(([k, name]) => [name, loose.filter((p) => kindOf(p) === k)]))
       .filter(([, ps]) => ps.length);
     const named = (value) => `<input class="sb-fname-in" value="${esc(value)}" placeholder="${esc(T.f_name)}" aria-label="${esc(T.f_name)}" maxlength="80" spellcheck="false">`;
+    const fresh = (parent) => (editing === 'new' && within === parent ? `<div class="sb-folder"><div class="sb-frow">${named('')}</div></div>` : '');
+    // a folder: its folders, then its documents; its count, the documents in it and in the folders inside it
     const folder = (f) => {
-      const ps = docs.filter((p) => folders.of[p.id] === f.id), shut = folded.has(f.id);
+      const ps = docs.filter((p) => folders.of[p.id] === f.id), subs = kidsOf(f.id), shut = folded.has(f.id), under = inside(f.id);
       const head = editing === f.id ? named(f.name)
-        : `<button type="button" class="sb-fhead" aria-expanded="${!shut}">${CHEV}${FOLDER}<span class="sb-fname">${esc(f.name)}</span><span class="sb-fn">${ps.length}</span></button>` +
+        : `<button type="button" class="sb-fhead" aria-expanded="${!shut}">${CHEV}${FOLDER}<span class="sb-fname">${esc(f.name)}</span>` +
+          `<span class="sb-fn">${docs.filter((p) => under.has(folders.of[p.id])).length}</span></button>` +
           `<button type="button" class="sb-fmenu" aria-label="${esc(T.f_actions)}" title="${esc(T.f_actions)}">⋯</button>`;
-      return `<div class="sb-folder${shut ? ' shut' : ''}" data-folder="${f.id}"><div class="sb-frow">${head}</div>` +
-        `<div class="sb-fitems">${ps.map(item).join('') || `<div class="sb-fempty">${esc(T.f_empty)}</div>`}</div></div>`;
+      const inner = fresh(f.id) + subs.map(folder).join('') + ps.map(item).join('');
+      return `<div class="sb-folder${shut ? ' shut' : ''}" data-folder="${f.id}"><div class="sb-frow"${editing === f.id ? '' : ' draggable="true"'}>${head}</div>` +
+        `<div class="sb-fitems">${inner || `<div class="sb-fempty">${esc(T.f_empty)}</div>`}</div></div>`;
     };
     const kinds = groups.length > 1 || fs.length
       ? groups.map(([name, ps]) => `<div class="sb-group">${esc(name)}</div>${ps.map(item).join('')}`).join('')
       : loose.map(item).join('');
     const listed_ = papers.length || fs.length || editing
-      ? (editing === 'new' ? `<div class="sb-folder"><div class="sb-frow">${named('')}</div></div>` : '') + fs.map(folder).join('') +
+      ? fresh(null) + kidsOf(null).map(folder).join('') +
         (fs.length ? `<div class="sb-out">${esc(T.f_out)}</div>` : '') + `<div class="sb-loose">${kinds}</div><div class="sb-nomatch" hidden>${esc(T.sb_nomatch)}</div>`
       : '';
     const pend = (j) => `<div class="sb-row" data-q="${esc(fold(`${jobName(j, T)} ${j.pid}`))}"><div class="sb-item pending"><span class="sb-t">${esc(jobName(j, T))}</span>` +
       `<span class="sb-m"><span class="sb-id">${j.pid}</span></span>${progress(j, T)}</div>${stopBtn(j, T)}</div>`;
     const html = `
       <div class="sb-head"><a class="sb-brand" href="/">${MARK}<span>TextFold</span></a>
-        <button type="button" class="sb-toggle" aria-label="${esc(T.collapse)}" title="${esc(T.collapse)}">‹</button></div>
+        <span class="sb-hbtns"><button type="button" class="sb-pin" aria-pressed="${pinned}" aria-label="${esc(pinned ? T.sb_unpin : T.sb_pin)}" title="${esc(pinned ? T.sb_unpin : T.sb_pin)}">${PIN}</button>
+        <button type="button" class="sb-toggle" aria-label="${esc(T.collapse)}" title="${esc(T.collapse)}">‹</button></span></div>
       <div class="sb-rail">
         <a class="rail-btn rail-home" href="/" title="${esc(T.home)}">${MARK}</a>
         <button type="button" class="rail-btn rail-open" title="${esc(T.expand)}">${LIST}</button>
@@ -165,16 +210,20 @@
       <div class="sb-order" role="radiogroup" aria-label="${esc(T.sort_label)}">${['kind', 'added', 'opened'].map((o) =>
         `<button type="button" role="radio" aria-checked="${o === order}" data-sort="${o}" title="${esc(T[`sort_${o}`])}">${esc(T[`by_${o}`])}</button>`).join('')}</div>
       ${groups.length > 1 || fs.length ? '' : `<div class="sb-label">${esc(groups.length ? groups[0][0] : T.papers)}</div>`}
-      <nav class="sb-list">${pending.map(pend).join('')}${listed_ || (pending.length ? '' : `<div class="sb-empty">${esc(T.empty)}</div>`)}</nav>
+      <nav class="sb-list${chosen.size ? ' choosing' : ''}">${pending.map(pend).join('')}${listed_ || (pending.length ? '' : `<div class="sb-empty">${esc(T.empty)}</div>`)}</nav>
+      ${chosen.size ? `<div class="sb-chosen" role="toolbar" aria-label="${esc(T.sel_n.replace('{n}', chosen.size))}" title="${esc(selTip(T))}">` +
+        `<span class="sb-cn">${esc(T.sel_n.replace('{n}', chosen.size))}</span><button type="button" class="sb-cmove">${esc(T.sel_move)}</button>` +
+        `<button type="button" class="sb-cdel">${esc(T.sel_delete)}</button>` +
+        `<button type="button" class="sb-cx" title="${esc(T.sel_clear)}" aria-label="${esc(T.sel_clear)}">×</button></div>` : ''}
       <div class="sb-foot"><button type="button" class="sb-zotero">${BOOKS}${esc(T.z_lib)}</button><button type="button" class="sb-settings">⚙ ${esc(T.settings)}</button>${window.TFTutorial && PAPER ? `<button type="button" class="sb-help">? ${esc(T.tut_open)}</button>` : ''}<div class="sb-model">${esc(modelLabel())}</div></div>
       <div class="sb-resize" role="separator" aria-orientation="vertical" tabindex="0" title="${esc(T.sb_resize)}" aria-label="${esc(T.sb_resize)}"></div>`;
     // polled every second while something generates: drawn again only when it changed, and where it was scrolled to
     const busy = jobs.some(live);
-    if (dragging) return;   // (drawn again after the drop: the row being dragged stays where the drag began)
+    if (dragging || draggingFolder) return;   // (drawn again after the drop: the row being dragged stays where the drag began)
     if (html === lastSidebar) { side.querySelector('.rail-open').classList.toggle('busy', busy); return; }
     const scrolled = side.querySelector('.sb-list') ? side.querySelector('.sb-list').scrollTop : 0;
-    const act = document.activeElement, typing = act && side.contains(act) && act.matches('.sb-q, .sb-fname-in')
-      ? { sel: act.matches('.sb-q') ? '.sb-q' : '.sb-fname-in', value: act.value, a: act.selectionStart, b: act.selectionEnd } : null;
+    const act = document.activeElement, typing = act && side.contains(act) && act.matches('.sb-q, .sb-fname-in, .sb-dname-in')
+      ? { sel: ['.sb-q', '.sb-fname-in', '.sb-dname-in'].find((s) => act.matches(s)), value: act.value, a: act.selectionStart, b: act.selectionEnd } : null;
     closeMenu();
     side.innerHTML = html;
     lastSidebar = html;
@@ -183,6 +232,7 @@
     if (field) { field.value = typing.value; field.focus(); try { field.setSelectionRange(typing.a, typing.b); } catch { /* (a search field) */ } }
     applySearch();
     side.querySelector('.sb-toggle').onclick = () => setCollapsed(true);
+    side.querySelector('.sb-pin').onclick = () => setPinned(!pinned);
     side.querySelector('.rail-open').onclick = () => setCollapsed(false);
     side.querySelectorAll('.sb-settings, .rail-settings').forEach((b) => { b.onclick = openSettings; });
     side.querySelector('.sb-zotero').onclick = () => openLibrary();
@@ -206,32 +256,75 @@
   // an unfinished paper goes on in the language it was last asked for (else the reader's), in the background
   function resume(pid) {
     const last = [...jobs].reverse().find((j) => j.pid === pid);
-    const lang = (last && last.lang) || uiLang;
+    const lang = (last && last.lang) || readLang;
     submit(pid, lang, false, () => {}).catch(() => {});
   }
-  // a paper off the list, after a prompt that says what goes with it; the server moves its folder to papers/.trash
+  // a paper off the list, or those picked, after a prompt that says what goes with them; the server moves their
+  // folders to papers/.trash, and for a while the corner offers them back (Undo), here or on the page it goes to
   async function deletePaper(pid) {
     const T = t(), p = papers.find((x) => x.id === pid);
     if (!p) return;
-    const title = (p.titles && p.titles[uiLang]) || p.title;
+    const title = p.name || (p.titles && p.titles[readLang]) || p.title;
     if (!confirm(T.del_confirm.replace('{title}', title).replace('{n}', p.notes || 0))) return;
-    try { papers = await api('/api/papers/delete', { paper: pid }); }
-    catch (err) { alert(err.message === 'busy' ? T.del_busy : err.message); return; }
-    if (PAPER && PAPER.id === pid) { location.href = '/'; return; }
+    await deleteAll([pid], T.del_done.replace('{title}', title));
+  }
+  async function deleteChosen(ids) {
+    const T = t(), ps = papers.filter((p) => ids.includes(p.id));
+    if (ps.length < 2) { if (ps.length) await deletePaper(ps[0].id); return; }
+    const n = ps.reduce((k, p) => k + (p.notes || 0), 0);
+    if (!confirm(T.sel_del_confirm.replace('{k}', ps.length).replace('{n}', n))) return;
+    await deleteAll(ps.map((p) => p.id), T.del_done_n.replace('{n}', ps.length));
+  }
+  async function deleteAll(ids, said) {
+    const T = t();
+    let r;
+    try { r = await api('/api/papers/delete', { papers: ids }); } catch (err) { alert(err.message); return; }
+    papers = r.papers;
+    for (const id of r.deleted) chosen.delete(id);
+    if (r.busy.length) alert(ids.length === 1 ? T.del_busy : T.sel_busy.replace('{n}', r.busy.length));
+    if (!r.deleted.length) { renderSidebar(); return; }
+    const undo = { ids: r.deleted, said: r.deleted.length === ids.length ? said : T.del_done_n.replace('{n}', r.deleted.length), until: Date.now() + UNDO_MS };
+    if (PAPER && r.deleted.includes(PAPER.id)) {   // (the paper being read: the landing says it, and offers it back)
+      try { sessionStorage.setItem(UNDO, JSON.stringify(undo)); } catch { /* private window */ }
+      location.href = '/';
+      return;
+    }
     renderSidebar();
+    offerUndo(undo);
   }
   function setCollapsed(c) {
     side.classList.toggle('collapsed', c);
     document.documentElement.classList.toggle('sb-open', !c);
-    if (!PAPER) store.set('dr-sidebar', c ? '1' : '0');
+    if (!PAPER || pinned) store.set('dr-sidebar', c ? '1' : '0');
+    dockState();
   }
-  // over a paper the sidebar folds to a rail and opens over the page; on the landing it stays open beside the form
-  if (PAPER) {
-    side.classList.add('collapsed');
-    // (by where the click was when it happened: what it hit may be drawn anew by then, a folder shut, an order picked)
-    document.addEventListener('click', (e) => { if (!side.classList.contains('collapsed') && !e.composedPath().includes(side)) setCollapsed(true); });
-  } else if (store.get('dr-sidebar') === '1' || innerWidth < 720) setCollapsed(true);
-  else document.documentElement.classList.add('sb-open');
+  // over a paper the sidebar folds to a rail and opens over the page; on the landing it stays open beside the form.
+  // Pinned (its pin, kept in this browser), it stays open beside the paper too, as on the landing, and is folded or
+  // opened as there: the page makes room for it (app.css, html.sb-docked)
+  // a paper beside the open sidebar: the page starts at its edge, and a window too narrow for the notes in the margins
+  // as well has them in the column (html.sb-narrow, as beside the PDF); the reader lays its margins out again
+  function dockState() {
+    const r = document.documentElement, was = `${r.classList.contains('sb-docked')}${r.classList.contains('sb-narrow')}`;
+    const on = !!PAPER && pinned && !side.classList.contains('collapsed') && innerWidth >= 720 && !r.classList.contains('focus');   // (focus: the text alone)
+    const sb = parseFloat(getComputedStyle(r).getPropertyValue('--sb')) || 280;
+    r.classList.toggle('sb-docked', on);
+    r.classList.toggle('sb-narrow', on && innerWidth - sb < 1248);
+    if (was !== `${r.classList.contains('sb-docked')}${r.classList.contains('sb-narrow')}`) dispatchEvent(new Event('resize'));
+  }
+  function setPinned(p) {
+    pinned = p;
+    store.set(PIN_KEY, p ? '1' : '0');
+    if (p) store.set('dr-sidebar', side.classList.contains('collapsed') ? '1' : '0');
+    const b = side.querySelector('.sb-pin'), t = I18N.t(uiLang);
+    if (b) { b.setAttribute('aria-pressed', String(p)); b.title = p ? t.sb_unpin : t.sb_pin; b.setAttribute('aria-label', b.title); }
+    dockState();
+  }
+  if (PAPER && !pinned) side.classList.add('collapsed');
+  else if (store.get('dr-sidebar') === '1' || innerWidth < 720) setCollapsed(true);
+  else setCollapsed(false);   // (a paper's page comes with its sidebar folded)
+  // (by where the click was when it happened: what it hit may be drawn anew by then, a folder shut, an order picked)
+  if (PAPER) document.addEventListener('click', (e) => { if (!pinned && !side.classList.contains('collapsed') && !e.composedPath().includes(side)) setCollapsed(true); });
+  dockState();
 
   // its width, dragged at its edge (or with the arrow keys there) and kept for next time; a double-click goes back to the default
   const SBW = 'textfold.sbw';
@@ -241,7 +334,7 @@
     document.documentElement.style.setProperty('--sb', `${sbw}px`);
   }
   if (sbw) setWidth(sbw);
-  addEventListener('resize', () => { if (+store.get(SBW)) setWidth(+store.get(SBW)); });
+  addEventListener('resize', () => { if (+store.get(SBW)) setWidth(+store.get(SBW)); dockState(); });
   side.addEventListener('pointerdown', (e) => {
     const grip = e.target.closest('.sb-resize');
     if (!grip || e.button !== 0) return;
@@ -253,6 +346,7 @@
       grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
       document.documentElement.classList.remove('sb-resizing');
       store.set(SBW, String(sbw));
+      if (document.documentElement.classList.contains('sb-docked')) dispatchEvent(new Event('resize'));   // (the page beside it is narrower or wider)
     };
     grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
   });
@@ -271,7 +365,17 @@
   // ── the library's search and folders ────────────────────────────────
   // a search narrows the list as it is typed: every word, in a title (any language's), an author or an id, accents aside
   function fold(s) { return String(s || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase(); }
-  function hay(p) { return fold([p.title, ...Object.values(p.titles || {}), ...(p.authors || []), p.id].join(' ')); }
+  function hay(p) { return fold([p.name || '', p.title, ...Object.values(p.titles || {}), ...(p.authors || []), p.id].join(' ')); }
+  // the folders inside a folder (null: at the top), in the order they were made; and a folder with all inside it
+  function kidsOf(id) { return folders.folders.filter((f) => (f.parent || null) === id); }
+  function inside(id) {
+    const out = new Set([id]);
+    for (let more = true; more;) {
+      more = false;
+      for (const f of folders.folders) if (out.has(f.parent) && !out.has(f.id)) { out.add(f.id); more = true; }
+    }
+    return out;
+  }
   function applySearch() {
     const list = side.querySelector('.sb-list');
     if (!list) return;
@@ -324,7 +428,10 @@
       }
     } else if (e.target.matches('.sb-fname-in')) {
       if (e.key === 'Enter') { e.preventDefault(); saveName(e.target.value); }
-      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); editing = null; moving = null; renderSidebar(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); editing = null; moving = null; within = null; renderSidebar(); }
+    } else if (e.target.matches('.sb-dname-in')) {
+      if (e.key === 'Enter') { e.preventDefault(); saveDocName(e.target.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); renaming = null; renderSidebar(); }
     } else if (e.target.matches('.sb-list .sb-item') && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       const all = [...side.querySelectorAll('.sb-list .sb-row:not([hidden]) .sb-item')].filter((a) => a.offsetParent);
       const n = all.indexOf(e.target) + (e.key === 'ArrowDown' ? 1 : -1);
@@ -334,24 +441,57 @@
   });
   side.addEventListener('focusout', (e) => {   // a name left: kept when it has one
     if (e.target.matches('.sb-fname-in') && editing !== null) saveName(e.target.value);
+    else if (e.target.matches('.sb-dname-in') && renaming !== null) saveDocName(e.target.value);
   });
-  function editName(id, pid = null) {
-    editing = id; moving = pid;
+  // a folder's name written in place: a new one's (inside `parent`, which opens for it), or the folder's own
+  function editName(id, pid = null, parent = null) {
+    editing = id; moving = pid; within = parent;
+    if (parent && folded.delete(parent)) store.set(FOLDED, [...folded].join(' '));
     renderSidebar();
     const f = side.querySelector('.sb-fname-in');
     if (f) { f.focus(); f.select(); }
   }
   async function saveName(value) {
-    const id = editing, name = value.trim(), papers = moving ? [moving] : [];
-    editing = null; moving = null;
+    const id = editing, name = value.trim(), papers = moving ? [].concat(moving) : [], parent = within, many = Array.isArray(moving);
+    editing = null; moving = null; within = null;
+    if (many && name) chosen.clear();
     if (name && id) {
-      try { folders = await api('/api/folders', id === 'new' ? { op: 'new', name, papers } : { op: 'rename', id, name }); }
+      try { folders = await api('/api/folders', id === 'new' ? { op: 'new', name, papers, parent } : { op: 'rename', id, name }); }
       catch (err) { alert(err.message); }
     }
     renderSidebar();
   }
-  async function moveTo(pid, folder) {
-    try { folders = await api('/api/folders', { op: 'move', papers: [pid], folder }); }
+  // a document's name in the library, written in its row: what the reader calls it (its own title stays its own;
+  // written back, or emptied, the name goes)
+  function editDocName(pid) {
+    renaming = pid;
+    renderSidebar();
+    const f = side.querySelector('.sb-dname-in');
+    if (f) { f.focus(); f.select(); }
+  }
+  async function saveDocName(value) {
+    const pid = renaming, p = papers.find((x) => x.id === pid), name = value.trim();
+    renaming = null;
+    if (!p || name === (p.name || '')) { renderSidebar(); return; }
+    const own = [p.title, ...Object.values(p.titles || {})].includes(name);
+    if (!p.name && (own || !name)) { renderSidebar(); return; }
+    await nameDoc(pid, own ? '' : name);
+  }
+  async function nameDoc(pid, name) {
+    try { papers = await api('/api/papers/name', { paper: pid, name }); }
+    catch (err) { alert(err.message); }
+    renderSidebar();
+    const p = papers.find((x) => x.id === pid);
+    if (PAPER && PAPER.id === pid && p && window.__reader && window.__reader.rename) window.__reader.rename(p.name || '');
+  }
+  async function nestFolder(id, parent) {
+    try { folders = await api('/api/folders', { op: 'nest', id, parent }); }
+    catch (err) { alert(err.message); }
+    renderSidebar();
+  }
+  async function moveTo(pids, folder) {   // (one, or those picked: they are let go of)
+    const many = Array.isArray(pids);
+    try { folders = await api('/api/folders', { op: 'move', papers: [].concat(pids), folder }); if (many) chosen.clear(); }
     catch (err) { alert(err.message); }
     renderSidebar();
   }
@@ -370,29 +510,92 @@
     side.querySelectorAll('.menu-on').forEach((x) => x.classList.remove('menu-on'));
     if (stale) renderSidebar();
   }
+  // a folder's: a folder inside it, its name, up out of the folder it is in, deleted
   function folderMenu(btn, id, at) {
-    const T = t();
-    showMenu(btn, `<button type="button" role="menuitem" data-act="rename">${esc(T.f_rename)}</button>` +
+    const T = t(), f = folders.folders.find((x) => x.id === id), up = f && f.parent ? folders.folders.find((x) => x.id === f.parent) : null;
+    showMenu(btn, `<button type="button" role="menuitem" data-act="sub">${FOLDER_NEW}<span class="sb-mname">${esc(T.f_new_sub)}…</span></button>` +
+      `<button type="button" role="menuitem" data-act="rename">${esc(T.f_rename)}</button>` +
+      (up ? `<button type="button" role="menuitem" data-act="up">${esc(T.f_up)}</button>` : '') +
       `<button type="button" role="menuitem" class="danger" data-act="delete">${esc(T.f_delete)}</button>`,
-    (a) => { if (a.dataset.act === 'rename') editName(id); else deleteFolder(id); }, at);
+    (a) => {
+      const act = a.dataset.act;
+      if (act === 'sub') editName('new', null, id);
+      else if (act === 'rename') editName(id);
+      else if (act === 'up') nestFolder(id, up.parent || null);
+      else deleteFolder(id);
+    }, at);
   }
-  // a document's, at a right click on it: into a folder (however far down the list it is), out of its own, into a new
-  // one named there, or deleted
+  // the folders as a tree, each with how deep it is: [folder, depth], in the order the sidebar shows them
+  function tree(id = null, depth = 0) { return kidsOf(id).flatMap((f) => [[f, depth], ...tree(f.id, depth + 1)]); }
+  // a document's, at a right click on it: into a folder (however far down the list it is, however deep), out of its
+  // own, into a new one named there; its name in the library; or deleted
   function docMenu(btn, pid, at) {
-    const T = t(), here = folders.of[pid] || null;
-    const fs = folders.folders.map((f) => `<button type="button" role="menuitemradio" aria-checked="${f.id === here}" data-to="${f.id}">` +
+    const T = t(), here = folders.of[pid] || null, p = papers.find((x) => x.id === pid);
+    const fs = tree().map(([f, depth]) => `<button type="button" role="menuitemradio" aria-checked="${f.id === here}" data-to="${f.id}" style="--d:${depth}">` +
       `${FOLDER}<span class="sb-mname">${esc(f.name)}</span></button>`).join('');
     showMenu(btn, (fs ? `<div class="sb-mlabel">${esc(T.f_move_to)}</div>${fs}` : '') +
       (here ? `<button type="button" role="menuitem" data-to="">${esc(T.f_take_out)}</button>` : '') +
       `<button type="button" role="menuitem" data-act="new">${FOLDER_NEW}<span class="sb-mname">${esc(T.f_new)}…</span></button>` +
-      `<div class="sb-msep" role="separator"></div><button type="button" role="menuitem" class="danger" data-act="delete">${esc(T.del_paper)}</button>`,
+      `<div class="sb-msep" role="separator"></div>` +
+      (chosen.has(pid) ? '' : `<button type="button" role="menuitem" data-act="pick" title="${esc(selTip(T))}">${esc(T.sel_pick)}</button>`) +
+      `<button type="button" role="menuitem" data-act="rename">${esc(T.f_rename)}</button>` +
+      (p && p.name ? `<button type="button" role="menuitem" data-act="unname">${esc(T.d_unname)}</button>` : '') +
+      `<button type="button" role="menuitem" class="danger" data-act="delete">${esc(T.del_paper)}</button>`,
     (a) => {
       if (a.dataset.act === 'new') editName('new', pid);
+      else if (a.dataset.act === 'pick') { chosen.add(pid); chosenAt = pid; renderSidebar(); }
+      else if (a.dataset.act === 'rename') editDocName(pid);
+      else if (a.dataset.act === 'unname') nameDoc(pid, '');
       else if (a.dataset.act === 'delete') deletePaper(pid);
       else if ((a.dataset.to || null) !== here) moveTo(pid, a.dataset.to || null);
     }, at);
   }
-  // under its button at the sidebar's right, or where the right click was (kept inside the sidebar); a pick closes it
+  // the documents picked: into a folder (ticked: the one they are all in), out of theirs, into a new one, or deleted
+  function chosenMenu(btn, at) {
+    const T = t(), ids = [...chosen], ins = new Set(ids.map((id) => folders.of[id] || null)), all = ins.size === 1 ? [...ins][0] : undefined;
+    const fs = tree().map(([f, depth]) => `<button type="button" role="menuitemradio" aria-checked="${f.id === all}" data-to="${f.id}" style="--d:${depth}">` +
+      `${FOLDER}<span class="sb-mname">${esc(f.name)}</span></button>`).join('');
+    showMenu(btn, (fs ? `<div class="sb-mlabel">${esc(T.f_move_to)}</div>${fs}` : '') +
+      ([...ins].some(Boolean) ? `<button type="button" role="menuitem" data-to="">${esc(T.f_take_out)}</button>` : '') +
+      `<button type="button" role="menuitem" data-act="new">${FOLDER_NEW}<span class="sb-mname">${esc(T.f_new)}…</span></button>` +
+      `<div class="sb-msep" role="separator"></div><button type="button" role="menuitem" class="danger" data-act="delete">${esc(T.sel_del_n.replace('{n}', ids.length))}</button>`,
+    (a) => {
+      if (a.dataset.act === 'new') editName('new', ids);
+      else if (a.dataset.act === 'delete') deleteChosen(ids);
+      else if ((a.dataset.to || null) !== all) moveTo(ids, a.dataset.to || null);
+    }, at);
+  }
+  const selTip = (T) => T.sel_tip.replace('⌘', MAC ? '⌘' : 'Ctrl');
+  function clearChosen() { chosen.clear(); chosenAt = null; renderSidebar(); }
+  const shownRows = () => [...side.querySelectorAll('.sb-list .sb-row[data-pid]:not([hidden])')].filter((r) => r.offsetParent);
+  // ⌘/Ctrl-click or Shift-click on a document picks it instead of opening it; while some are picked, a click picks or
+  // unpicks, and Shift picks every row shown from the one picked last to this one
+  side.addEventListener('click', (e) => {
+    const a = e.target.closest('.sb-row[data-pid] > .sb-item');
+    if (!a || e.button !== 0 || !(e.metaKey || e.ctrlKey || e.shiftKey || chosen.size)) return;
+    e.preventDefault(); e.stopPropagation();
+    const pid = a.parentElement.dataset.pid, rows = shownRows().map((r) => r.dataset.pid);
+    const i = rows.indexOf(chosenAt), j = rows.indexOf(pid);
+    if (e.shiftKey && i >= 0 && j >= 0) for (const id of rows.slice(Math.min(i, j), Math.max(i, j) + 1)) chosen.add(id);
+    else if (chosen.has(pid)) chosen.delete(pid);
+    else chosen.add(pid);
+    chosenAt = pid;
+    renderSidebar();
+    if (e.detail === 0) { const again = side.querySelector(`.sb-row[data-pid="${CSS.escape(pid)}"] > .sb-item`); if (again) again.focus(); }   // (the keyboard's Enter)
+  }, true);
+  side.addEventListener('mousedown', (e) => { if (e.shiftKey && e.target.closest('.sb-row[data-pid] > .sb-item')) e.preventDefault(); });   // (no text selected by it)
+  // Esc lets go of them; ⌘A (Ctrl+A) in the list picks every document it shows
+  addEventListener('keydown', (e) => {
+    if (side.classList.contains('collapsed') || menu || (e.target.closest && e.target.closest('input, textarea, select, [contenteditable]'))) return;
+    if (e.key === 'Escape' && chosen.size && !document.querySelector('dialog[open]')) { e.preventDefault(); clearChosen(); }
+    else if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && document.activeElement && side.querySelector('.sb-list').contains(document.activeElement)) {
+      e.preventDefault();
+      for (const r of shownRows()) chosen.add(r.dataset.pid);
+      renderSidebar();
+    }
+  });
+  // under its button at the sidebar's right (above it, where there is no room below), or where the right click was
+  // (kept inside the sidebar); a pick closes it
   function showMenu(btn, items, pick, at) {
     closeMenu();
     menu = document.createElement('div');
@@ -406,7 +609,8 @@
       menu.style.left = `${Math.max(8, Math.min(at.x - s.left, s.width - menu.offsetWidth - 8))}px`;
       menu.style.top = `${Math.max(8, Math.min(at.y - s.top, s.height - menu.offsetHeight - 8))}px`;
     } else {
-      menu.style.top = `${Math.min(r.bottom - s.top + 4, s.height - menu.offsetHeight - 8)}px`;
+      const below = r.bottom - s.top + 4;
+      menu.style.top = `${below + menu.offsetHeight + 8 > s.height ? Math.max(8, r.top - s.top - menu.offsetHeight - 4) : below}px`;
       menu.style.right = `${Math.max(8, s.right - r.right)}px`;
     }
     menu.onclick = (e) => {
@@ -425,10 +629,11 @@
   document.addEventListener('click', (e) => { if (menu && !menu.contains(e.target) && !e.target.closest('.sb-fmenu')) closeMenu(); });
   side.addEventListener('contextmenu', (e) => {
     const row = e.target.closest('.sb-row[data-pid]'), head = !row && e.target.closest('.sb-folder[data-folder] > .sb-frow');
-    if (!row && !(head && head.querySelector('.sb-fmenu'))) { closeMenu(); return; }   // (a name being written: the field's own)
+    if ((!row || !row.querySelector('.sb-item')) && !(head && head.querySelector('.sb-fmenu'))) { closeMenu(); return; }   // (a name being written: the field's own)
     e.preventDefault();
     const at = e.clientX || e.clientY ? { x: e.clientX, y: e.clientY } : null;   // (none from the keyboard: by the row)
-    if (row) docMenu(row.querySelector('.sb-item'), row.dataset.pid, at);
+    if (row && chosen.size > 1 && chosen.has(row.dataset.pid)) chosenMenu(row.querySelector('.sb-item'), at);
+    else if (row) docMenu(row.querySelector('.sb-item'), row.dataset.pid, at);
     else folderMenu(head.querySelector('.sb-fmenu'), head.parentElement.dataset.folder, at);
   });
   document.addEventListener('contextmenu', (e) => { if (menu && !side.contains(e.target)) closeMenu(); });
@@ -436,6 +641,9 @@
     const b = e.target.closest('button');
     if (!b) return;
     if (b.matches('.sb-newf')) editName('new');
+    else if (b.matches('.sb-cmove')) { e.stopPropagation(); if (menu) closeMenu(); else chosenMenu(b); }
+    else if (b.matches('.sb-cdel')) deleteChosen([...chosen]);
+    else if (b.matches('.sb-cx')) clearChosen();
     else if (b.matches('.sb-order [data-sort]')) { store.set(SORT, b.dataset.sort); renderSidebar(); }
     else if (b.matches('.sb-fhead')) {   // shut, or open again
       const id = b.closest('.sb-folder').dataset.folder;
@@ -447,8 +655,16 @@
       if (menu) closeMenu(); else folderMenu(b, b.closest('.sb-folder').dataset.folder);
     }
   });
-  // a document dragged into a folder (onto its name, or into it), or out of any (onto the rest of the list)
+  // a document dragged into a folder (onto its name, or into it), or out of any (onto the rest of the list); a folder
+  // dragged into another (not into itself, nor into one inside it), or to the top the same way
   const dropOn = (e) => e.target.closest && (e.target.closest('.sb-folder[data-folder]') || e.target.closest('.sb-out, .sb-loose'));
+  const parentOf = (id) => ((folders.folders.find((f) => f.id === id) || {}).parent || null);
+  // where the thing dragged may go: the folder (null: out of any, to the top); undefined where it is already, or cannot
+  function dropTo(at) {
+    const to = at.matches('.sb-folder') ? at.dataset.folder : null;
+    if (draggingFolder) return parentOf(draggingFolder) === to || (to && inside(draggingFolder).has(to)) ? undefined : to;
+    return dragging.every((id) => (folders.of[id] || null) === to) ? undefined : to;
+  }
   // held near the list's top or bottom (or over the search above it), the list scrolls, the faster the nearer its edge:
   // a document far down reaches the folders at the top
   const EDGE = 48;
@@ -460,7 +676,7 @@
     edgeAt = performance.now();
     if (!edgeStep || edgeRaf) return;
     const step = () => {   // (until the drag ends, leaves the sidebar or stops near the edge)
-      if (!dragging || !edgeStep || performance.now() - edgeAt > 700) { edgeRaf = 0; return; }
+      if (!(dragging || draggingFolder) || !edgeStep || performance.now() - edgeAt > 700) { edgeRaf = 0; return; }
       list.scrollTop += edgeStep;
       edgeRaf = requestAnimationFrame(step);
     };
@@ -468,25 +684,39 @@
   }
   side.addEventListener('dragstart', (e) => {
     const row = e.target.closest && e.target.closest('.sb-row[data-pid]');
+    const head = !row && e.target.closest && e.target.closest('.sb-folder[data-folder] > .sb-frow');
+    if (head) {
+      draggingFolder = head.parentElement.dataset.folder;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('application/x-textfold-folder', draggingFolder);
+      side.classList.add('dragging');
+      side.classList.toggle('from-folder', !!parentOf(draggingFolder));
+      return;
+    }
     if (!row) return;
-    dragging = row.dataset.pid;
+    const pid = row.dataset.pid;
+    dragging = chosen.size > 1 && chosen.has(pid) ? [...chosen] : [pid];   // (a picked one takes the others along)
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('application/x-textfold-paper', dragging);
+    e.dataTransfer.setData('application/x-textfold-paper', dragging.join(' '));
+    if (dragging.length > 1) {   // what the pointer carries: how many
+      const img = h('div', 'sb-dragimg', esc(t().sel_n.replace('{n}', dragging.length)));
+      document.body.append(img);
+      e.dataTransfer.setDragImage(img, 14, 14);
+      setTimeout(() => img.remove());
+    }
     side.classList.add('dragging');
-    side.classList.toggle('from-folder', !!folders.of[dragging]);
+    side.classList.toggle('from-folder', dragging.some((id) => folders.of[id]));
   });
   side.addEventListener('dragend', () => {
-    dragging = null; edgeStep = 0;
+    dragging = null; draggingFolder = null; edgeStep = 0;
     side.classList.remove('dragging', 'from-folder');
     side.querySelectorAll('.drop').forEach((x) => x.classList.remove('drop'));
   });
   side.addEventListener('dragover', (e) => {
-    if (dragging) edgeScroll(e);
-    const at = dragging && dropOn(e);
+    if (dragging || draggingFolder) edgeScroll(e);
+    const at = (dragging || draggingFolder) && dropOn(e);
     side.querySelectorAll('.drop').forEach((x) => { if (x !== at) x.classList.remove('drop'); });
-    if (!at) return;
-    const to = at.matches('.sb-folder') ? at.dataset.folder : null;
-    if ((folders.of[dragging] || null) === to) return;   // (where it is already)
+    if (!at || dropTo(at) === undefined) return;   // (where it is already)
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     at.classList.add('drop');
@@ -497,12 +727,13 @@
     if (at && !at.contains(e.relatedTarget)) at.classList.remove('drop');
   });
   side.addEventListener('drop', (e) => {
-    const at = dragging && dropOn(e);
+    const at = (dragging || draggingFolder) && dropOn(e);
     if (!at) return;
     e.preventDefault();
-    const pid = dragging, to = at.matches('.sb-folder') ? at.dataset.folder : null;
-    dragging = null;
-    if ((folders.of[pid] || null) !== to) moveTo(pid, to);
+    const pids = dragging, fid = draggingFolder, to = dropTo(at);
+    dragging = null; draggingFolder = null;
+    if (to === undefined) return;
+    if (fid) nestFolder(fid, to); else moveTo(pids.length > 1 ? pids : pids[0], to);
   });
 
   // ── jobs ─────────────────────────────────────────────────────────────
@@ -583,9 +814,53 @@
   }
   // File selection, drop and browser tools share the upload dispatch and PDF reference discovery.
   window.TFUploads = { importFile, isText,
-    language: () => document.getElementById('lang')?.value || uiLang,
+    language: () => document.getElementById('lang')?.value || window.__reader?.lang || readLang,
     hasModel: () => !!modelName,
-    supportsLanguage: lang => I18N.CODES.includes(lang) };
+    supportsLanguage: lang => !!(BOOT.langs || DATA?.langs || I18N.NATIVE)?.[lang] };
+  // several files at once (dropped, or chosen together): each goes to the server in turn, one upload at a time, and its
+  // job waits in the server's queues, which read the files and write their levels one after another (the sidebar shows
+  // each, with its stop). Files given while others are still going up wait for them. Says what came of them: how many
+  // were taken, the uploads that wait for the PDF engine, and each file not taken with why.
+  let adding = Promise.resolve();
+  function addFiles(files, lang, step) {
+    const run = adding.then(async () => {
+      const got = { taken: 0, engine: [], skipped: [] };
+      for (const [k, file] of files.entries()) {
+        step(k, file);
+        const why = !forEngine(file) && !isText(file) ? t().md_only
+          : file.size > 100 * 1024 * 1024 ? (isPdf(file) ? t().pdf_large : t().file_large)
+          : isText(file) && !modelName ? t().fl_no_model : '';
+        if (why) { got.skipped.push([file.name, why]); continue; }
+        try {
+          if (isText(file)) {
+            const r = await importFile(file, lang);
+            await submit(r.paper, lang, false, () => {});
+          } else {
+            const d = await importFile(file, lang);
+            if (d.needs === 'engine') { got.engine.push(d.upload); continue; }
+            watch(d.job, () => {});
+          }
+          got.taken++;
+          // the library again, so that the sidebar names a stored file by its title while its job waits
+          try { papers = await api('/api/papers'); if (menu) stale = true; else renderSidebar(); } catch { /* the next poll does */ }
+        } catch (x) { got.skipped.push([file.name, errText(x.message)]); }
+      }
+      return got;
+    });
+    adding = run.catch(() => {});
+    return run;
+  }
+  // what came of them, as lines: [heading, the lines under it, the files not taken (name: why), a few at most]
+  function filesSaid(got, n, T) {
+    const lines = [got.taken ? (modelName ? T.fl_queue : T.fl_read) : '', got.engine.length ? T.fl_engine.replace('{n}', got.engine.length) : ''].filter(Boolean);
+    const not = got.skipped.slice(0, 6).map(([name, why]) => `${name}: ${why}`);
+    if (got.skipped.length > 6) not.push('…');
+    return [T.fl_added.replace('{n}', got.taken + got.engine.length).replace('{m}', n), lines, not];
+  }
+  // the PDF engine installed for the files waiting for it (the server converts each once it is in); the sidebar shows it
+  async function installForFiles() {
+    watch(await api('/api/engine/install', {}), () => {});
+  }
   // OpenRouter's consent page. In the browser: this tab goes there and comes back with the key. Inside the app: the
   // system browser (where the reader is signed in) goes there, and the app waits for the key, then offers the models.
   async function connectOpenRouter(back) {
@@ -615,10 +890,46 @@
     warn: '<path d="M10 6.5V11M10 13.8v.2"/><circle cx="10" cy="10" r="7"/>',
     out: '<path d="M8.5 5.5h-3v9h9v-3M11.5 4.5h4v4M15.5 4.5l-6 6"/>',
     x: '<path d="M6 6l8 8M14 6l-8 8"/>',
+    bin: '<path d="M4.5 6h11M8.2 6V4.5h3.6V6M6 6l.8 9.5h6.4L14 6"/>',
   };
   const svg = (k) => `<svg viewBox="0 0 20 20" aria-hidden="true">${SIGN[k]}</svg>`;
   const sign = (k, tone) => `<span class="g-ico${tone ? ` ${tone}` : ''}">${k === 'mark' ? MARK : svg(k)}</span>`;
   const shut = (label) => `<button type="button" class="g-x" aria-label="${esc(label)}" title="${esc(label)}">${svg('x')}</button>`;
+
+  // ── a delete's Undo: for ten seconds the corner says what went, with a button that brings it back as it was (in
+  //    its folder, under its name); the paper being read, deleted, is offered back on the page it goes to ──
+  const UNDO = 'textfold.undo', UNDO_MS = 10000;
+  const undoBox = h('div', 'gen-toast undo-toast');
+  undoBox.hidden = true; toasts.append(undoBox);
+  let undoTimer = 0;
+  function offerUndo(u) {
+    const T = t(), close = () => { undoBox.querySelector('.g-x').onclick = () => { undoBox.hidden = true; }; };
+    clearTimeout(undoTimer);
+    undoBox.hidden = false;
+    undoBox.innerHTML = `${sign('bin')}<b>${esc(u.said)}</b>${shut(T.close)}<span class="g-acts"><button type="button" class="g-go">${esc(T.undo)}</button></span>`;
+    close();
+    const b = undoBox.querySelector('.g-go');
+    b.onclick = async () => {
+      b.disabled = true;
+      clearTimeout(undoTimer);
+      try {
+        const r = await api('/api/papers/restore', { papers: u.ids });
+        papers = r.papers; folders = r.folders;
+        renderSidebar();
+        undoBox.innerHTML = `${sign('done', 'ok')}<b>${esc(T.undone)}</b>`;
+        undoTimer = setTimeout(() => { undoBox.hidden = true; }, 2500);
+      } catch (err) {
+        undoBox.innerHTML = `${sign('warn', 'warn')}<b>${esc(err.message)}</b>${shut(T.close)}`;
+        close();
+      }
+    };
+    undoTimer = setTimeout(() => { undoBox.hidden = true; }, Math.max(0, u.until - Date.now()));
+  }
+  try {
+    const u = JSON.parse(sessionStorage.getItem(UNDO) || 'null');
+    sessionStorage.removeItem(UNDO);
+    if (u && Array.isArray(u.ids) && u.until > Date.now()) offerUndo(u);
+  } catch { /* private window */ }
 
   // ── the app's own updates (desktop/main.js): a newer release, downloaded and installed when the reader says ──
   if (window.desktop && window.desktop.onUpdate) {
@@ -666,14 +977,33 @@
     document.addEventListener('dragenter', (e) => { if (hasFile(e)) { over++; say(t().drop_md); } });
     document.addEventListener('dragleave', () => { if (--over <= 0) { over = 0; if (toast.textContent === t().drop_md) toast.hidden = true; } });
     document.addEventListener('dragover', (e) => { if (hasFile(e)) e.preventDefault(); });
+    // several dropped here: they go in from this page, which stays open, and the toast says what came of them
+    async function dropFiles(files) {
+      const T = t();
+      const got = await addFiles(files, readLang, (k, file) => {
+        toast.hidden = false;
+        toast.innerHTML = `${sign('down')}<b>${esc(T.fl_adding.replace('{k}', k + 1).replace('{n}', files.length))}</b>` +
+          `<span class="g-stage">${esc(file.name)}</span><span class="sb-prog"><i style="width:${Math.round((100 * k) / files.length) + 4}%"></i></span>`;
+      });
+      const [head, lines, not] = filesSaid(got, files.length, T);
+      toast.hidden = false;
+      toast.innerHTML = `${got.skipped.length && !got.taken && !got.engine.length ? sign('warn', 'warn') : sign('mark')}<b>${esc(head)}</b>${shut(T.close)}` +
+        lines.map((l) => `<span class="g-note">${esc(l)}</span>`).join('') +
+        (not.length ? `<span class="g-note">${esc(T.fl_skipped)}<br>${not.map(esc).join('<br>')}</span>` : '') +
+        (got.engine.length ? `<span class="g-acts"><button type="button" class="g-go primary">${esc(T.engine_install)}</button></span>` : '');
+      toast.querySelector('.g-x').onclick = () => { toast.hidden = true; };
+      const go = toast.querySelector('.g-go');
+      if (go) go.onclick = async () => { go.disabled = true; try { await installForFiles(); toast.hidden = true; } catch (x) { go.disabled = false; say(errText(x.message), 4000); } };
+    }
     document.addEventListener('drop', async (e) => {
       if (!e.dataTransfer.files.length) return;
       e.preventDefault(); over = 0;
+      if (e.dataTransfer.files.length > 1) { dropFiles([...e.dataTransfer.files]); return; }
       const file = e.dataTransfer.files[0];
       if (forEngine(file)) {
         say(isPdf(file) ? t().pdf_reading : t().file_reading);
         try {
-          const d = await importFile(file, uiLang);
+          const d = await importFile(file, readLang);
           if (d.paper) { location.href = `/p/${d.paper}?lang=${encodeURIComponent(d.job.lang)}`; return; }   // read already
           const q = new URLSearchParams({ t: file.name });
           if (d.needs === 'engine') q.set('engine', d.upload); else { q.set('follow', d.job.id); if (d.via === 'online') q.set('ref', d.ref); }
@@ -690,7 +1020,7 @@
     // a generation of this paper in the toast: its stage and a stop button; done, the page again, at the paragraph being
     // read (the reader picks it up from sessionStorage). `note` says why the page is here before its levels are.
     function toastFor(lang, note) {
-      const T = t(), name = I18N.NATIVE[lang];
+      const T = t(), name = nameOf(lang);
       toast.hidden = false;
       toast.innerHTML = `${sign('mark')}<b>${esc(T.generating)} · ${esc(name)}</b><span class="g-stage">${esc(T.stages.queued)}</span>` +
         `<span class="sb-prog"><i style="width:4%"></i></span>${note ? `<span class="g-note">${esc(note)}</span>` : ''}`;
@@ -723,7 +1053,7 @@
         if (u) break;
       }
       try { if (u) sessionStorage.setItem('pf-keep', JSON.stringify({ pid: PAPER.id, uid: u.dataset.u, top: u.getBoundingClientRect().top, level: R && R.level })); } catch { /* private window */ }
-      if (R && lang !== R.lang && I18N.NATIVE[lang]) store.set(UI_KEY, lang);   // a language just made: the interface goes with it
+      if (R && lang !== R.lang) { store.set(UI_KEY, lang); tellLang(lang); }   // a language just made: the interface goes with it
       const q = new URLSearchParams({ lang });
       if (PAPER.active_chapter) q.set('chapter', PAPER.active_chapter);
       location.href = `/p/${PAPER.id}?${q}`;
@@ -812,19 +1142,35 @@
         catch (x) { update.fail(x); acc.disabled = false; }
       };
     }
+    // A translation stored with paragraphs it has none for (PAPER.gaps: a call that failed, a paragraph the model left
+    // out; or made before TextFold asked for them again): they are asked for as it is opened, with the model in use, the
+    // rest kept. Once a visit for as many as there are, so one that will not translate is not asked for at every
+    // opening; the language menu asks again (asked).
+    function fillGaps(lang, asked) {
+      const n = (PAPER.gaps || {})[lang], key = `tf-gaps:${PAPER.id}:${lang}`;
+      if (!n || jobFor(PAPER.id) || !modelName) return;
+      let tried = null;
+      try { tried = sessionStorage.getItem(key); } catch { /* private window */ }
+      if (!asked && tried === String(n)) return;
+      try { sessionStorage.setItem(key, String(n)); } catch { /* private window */ }
+      const update = toastFor(lang, t().gaps_filling.replace('{n}', n));
+      submit(PAPER.id, lang, false, update).catch(update.fail);
+    }
     window.DRApp = {
-      onLang(lang, ui) {   // (ui: the reader's language, which a switch of the paper's moves)
-        if (ui && ui !== uiLang && I18N.NATIVE[ui]) uiLang = ui;
+      onLang(lang, readerLang) {   // (readerLang: the reader's language, which a switch of the paper's moves)
+        if (readerLang && readerLang !== readLang && READ[readerLang]) { readLang = readerLang; uiLang = I18N.uiFor(readerLang); tellLang(readerLang); }
         renderSidebar();
+        fillGaps(lang);
       },
       generate(lang, force) {
-        const T = t(), name = I18N.NATIVE[lang];
+        const T = t(), name = nameOf(lang);
         if (force && !confirm(`${T.regen} · ${name}?`)) return;
         const update = toastFor(lang);
         submit(PAPER.id, lang, force, update).catch(update.fail);
       },
+      fill(lang) { fillGaps(lang, true); },
     };
-    api('/api/models').then((d) => { modelData = d; modelName = d.selectedName || ''; askName = d.askName || ''; renderSidebar(); }).catch(() => {});
+    const modelsIn = api('/api/models').then((d) => { modelData = d; modelName = d.selectedName || ''; askName = d.askName || ''; renderSidebar(); }).catch(() => {});
     api('/api/papers').then((p) => { papers = p; renderSidebar(); }).catch(() => {});
     api('/api/folders').then((f) => { folders = f; renderSidebar(); }).catch(() => {});
     api('/api/jobs').then((j) => {
@@ -836,7 +1182,7 @@
         const update = toastFor(mine.lang, t().read_first);
         watchers.set(mine.id, (x) => { update(x); if (!live(x)) watchers.delete(x.id); });
         update(mine);
-      }
+      } else modelsIn.then(() => fillGaps((window.__reader && window.__reader.lang) || new URLSearchParams(location.search).get('lang') || 'en'));
       if (j.some(live)) startPolling();
     }).catch(() => {});
   }
@@ -850,7 +1196,7 @@
     document.getElementById('ref').placeholder = T.placeholder;
     document.getElementById('ref').setAttribute('aria-label', T.placeholder);
     document.getElementById('l-lang').textContent = T.read_in;
-    document.getElementById('lang').value = uiLang;
+    document.getElementById('lang').value = readLang;
     const ui = document.getElementById('ui-lang');
     ui.value = uiLang;
     document.getElementById('ui-lang-box').title = T.language;
@@ -900,14 +1246,16 @@
   }
   if (landing) {
     const sel = document.getElementById('lang');
-    for (const code of I18N.CODES) sel.append(Object.assign(h('option'), { value: code, textContent: I18N.NATIVE[code] }));
-    sel.value = uiLang;
-    // the language, top right, and the one to read in, beside the bar: one language, so either moves both
+    for (const [code, name] of Object.entries(READ)) sel.append(Object.assign(h('option'), { value: code, textContent: name }));
+    sel.value = readLang;
+    // the language, top right, and the one to read in, beside the bar: one language, so either moves both (one the
+    // interface has no words for leaves it in English)
     const ui = document.getElementById('ui-lang');
     for (const code of I18N.CODES) ui.append(Object.assign(h('option'), { value: code, textContent: I18N.NATIVE[code] }));
     ui.value = uiLang;
-    sel.onchange = () => setUiLang(sel.value);
-    ui.onchange = () => setUiLang(ui.value);
+    sel.onchange = () => setReaderLang(sel.value);
+    if (modelData && modelData.lang == null) tellLang(readLang);   // (one chosen before the server kept it)
+    ui.onchange = () => setReaderLang(ui.value);
     document.getElementById('open-settings').onclick = openSettings;
     const help = document.getElementById('ui-help');
     if (window.TFTutorial) help.onclick = () => window.TFTutorial.open(uiLang); else help.hidden = true;
@@ -918,7 +1266,7 @@
     function onCard(label, mine, note) {
       const cb = (j) => {
         if (latest !== mine) return;
-        const T = t(), name = esc(label || jobName(j, T)), in_ = j.lang ? ` · ${esc(I18N.NATIVE[j.lang])}` : '';
+        const T = t(), name = esc(label || jobName(j, T)), in_ = j.lang ? ` · ${esc(nameOf(j.lang))}` : '';
         if (j.status === 'moved' && j.next) { watchers.set(j.next, cb); startPolling(); return; }   // (an arXiv paper without HTML: its PDF converts)
         if (j.status === 'error' && j.error === 'needs-engine') { engineCard(j.upload, label || j.title || j.pid); return; }
         if (j.status === 'error') { card.innerHTML = `<div class="jc-t">${esc(T.failed)} · ${name}</div><div class="jc-e">${esc(errText(j.error))}</div>`; return; }
@@ -1050,11 +1398,36 @@
         start(r.paper, r.title);
       } catch (x) { fail(errText(x.message)); }
     }
+    // several at once: they go in one after another, and the card says what came of them; the page stays here, the
+    // sidebar showing each (one file opens as before)
+    async function openFiles(list) {
+      const files = [...list];
+      if (files.length < 2) { openFile(files[0]); return; }
+      err.hidden = true;
+      const T = t(), mine = {};
+      latest = mine;
+      card.hidden = false;
+      const got = await addFiles(files, sel.value, (k, file) => {
+        if (latest !== mine) return;
+        card.innerHTML = `<div class="jc-t">${esc(T.fl_adding.replace('{k}', k + 1).replace('{n}', files.length))}</div><div class="jc-s">${esc(file.name)}</div>` +
+          `<span class="sb-prog"><i style="width:${Math.round((100 * k) / files.length) + 4}%"></i></span>`;
+      });
+      if (latest !== mine) return;   // (something started since has the card; the files are in the sidebar)
+      const [head, lines, not] = filesSaid(got, files.length, T);
+      card.innerHTML = `<div class="jc-head"><div class="jc-t">${esc(head)}</div><button type="button" class="jc-stop jc-close">${esc(T.close)}</button></div>` +
+        lines.map((l) => `<div class="jc-s">${esc(l)}</div>`).join('') +
+        (not.length ? `<div class="jc-n">${esc(T.fl_skipped)}</div>${not.map((l) => `<div class="jc-e">${esc(l)}</div>`).join('')}` : '') +
+        (got.engine.length ? `<div class="jc-acts"><button type="button" class="primary jc-install">${esc(T.engine_install)}</button></div>` : '');
+      card.querySelector('.jc-close').onclick = () => { card.hidden = true; };
+      const inst = card.querySelector('.jc-install');
+      if (inst) inst.onclick = async () => { inst.disabled = true; try { await installForFiles(); card.hidden = true; } catch (x) { inst.disabled = false; fail(errText(x.message)); } };
+    }
     const fileIn = document.getElementById('file'), zone = document.getElementById('dropzone');
+    fileIn.multiple = true;
     fileIn.accept = [...ENGINE_EXT, ...TEXT_EXT].map((x) => `.${x}`).join(',');
     zone.title = [...ENGINE_EXT, ...TEXT_EXT].filter((x) => !['htm', 'mht', 'jpeg', 'tif', 'markdown', 'mdown'].includes(x)).map((x) => `.${x}`).join(' ');
     zone.onclick = () => fileIn.click();
-    fileIn.onchange = () => { openFile(fileIn.files[0]); fileIn.value = ''; };
+    fileIn.onchange = () => { openFiles(fileIn.files); fileIn.value = ''; };   // (openFiles copies the list first)
     let depth = 0;   // dragenter and dragleave fire for every child the file passes over
     const dropping = (on) => { zone.classList.toggle('dragging', on); document.getElementById('dropzone-t').textContent = on ? t().drop_md : t().drop_zone; };
     document.addEventListener('dragenter', (e) => { if ([...e.dataTransfer.types].includes('Files')) { depth++; dropping(true); } });
@@ -1063,7 +1436,7 @@
     document.addEventListener('drop', (e) => {
       if (!e.dataTransfer.files.length) return;
       e.preventDefault(); depth = 0; dropping(false);
-      openFile(e.dataTransfer.files[0]);
+      openFiles(e.dataTransfer.files);
     });
     renderLanding();
     // a first visit: how TextFold works, once (not when arriving mid-way: a file to generate, or back from OpenRouter)
@@ -1393,7 +1766,6 @@
         <div class="stp-body">
         <section><div class="st-list">
           <div class="st-item"><label class="st-main" for="st-ui"><b>${esc(t.language)}</b></label><select class="st-ui" id="st-ui">${I18N.CODES.map((c) => `<option value="${c}"${c === uiLang ? ' selected' : ''}>${esc(I18N.NATIVE[c])}</option>`).join('')}</select></div>
-          <div class="st-item"><label class="st-main" for="st-theme"><b>${esc(t.theme)}</b></label><select id="st-theme">${['system', 'light', 'dark'].map((m) => `<option value="${m}"${m === window.TFTheme.get() ? ' selected' : ''}>${esc(t[`theme_${m}`])}</option>`).join('')}</select></div>
           ${app ? `<div class="st-item st-app"><div class="st-main"><b>TextFold ${esc(app)}</b><span class="st-meta">${esc(t.up_note)} <a href="https://github.com/chenxiachan/textfold" target="_blank" rel="noopener">★ ${esc(t.up_star)}</a></span><span class="st-upd-msg" aria-live="polite"></span></div><button type="button" class="st-btn st-upd">${esc(t.up_check)}</button></div>` : ''}
         </div></section>
         <section><h3>${esc(t.st_models_h)}</h3><div class="st-model-area">${modelSection()}${discoveryState()}</div></section>
@@ -1480,8 +1852,8 @@
         msg.textContent = r.kind === 'latest' ? t.up_latest : r.kind === 'dev' ? t.up_dev : r.kind === 'check-failed' ? t.up_check_failed
           : r.kind === 'ready' ? t.up_ready.replace('{v}', r.version) : t.up_new.replace('{v}', r.version || '');
       };
-      q('#st-theme').onchange = (e) => window.TFTheme.set(e.target.value);
-      q('.st-ui').onchange = (e) => { setUiLang(e.target.value); render(); };
+
+      q('.st-ui').onchange = (e) => { setReaderLang(e.target.value); render(); };
       const sel = q('.st-model');
       if (sel) sel.onchange = async () => { delete tests.gen; if (!data.askModel) delete tests.ask; update(await api('/api/models/select', { model: sel.value })); };
       const askSel = q('.st-askmodel'), effSel = q('.st-effort');

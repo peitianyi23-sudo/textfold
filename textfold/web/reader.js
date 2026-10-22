@@ -28,19 +28,30 @@
   const SRC = (D.meta.source || {}).kind;
   const PAPER = ['europepmc', 'biorxiv', 'medrxiv'].includes(SRC) || (!SRC && /^\d{4}\.\d{4,5}$/.test(D.meta.id));
   const T = Object.fromEntries(I18N.CODES.map((c) => [c, I18N.t(c, !PAPER)]));
-  // One language, the reader's. The paper is read in `lang`: its text, and the names of its own parts (figures, tables,
-  // theorems, references, equations). The interface speaks `ui`: chosen in the app's settings, else the browser's. A
-  // switch of either is a switch of both (setLang, setUi). A paper that does not have the reader's language yet opens
-  // in one it has, and the interface stays as it was.
+  // One language, the reader's (`readerLang`): chosen in the app, else the browser's. The paper is read in `lang`: its
+  // text, and the names of its own parts (figures, tables, theorems, references, equations), in English where the
+  // interface has no words for that language. The interface speaks `ui`: the reader's language when it has the words,
+  // else English. A switch of either is a switch of both (setLang, setUi). A paper that does not have the reader's
+  // language yet opens in one it has, and the interface stays as it was.
   const UI_KEY = 'pf-ui-lang';
-  let ui = (() => { let v = null; try { v = localStorage.getItem(UI_KEY); } catch { /* private window */ } return v && T[v] ? v : I18N.guess(); })();
+  const NAMES = D.langs || I18N.NATIVE;   // every language a text can be read in, by its own name (build.py)
+  const nameOf = (code) => NAMES[code] || I18N.NATIVE[code] || code;
+  let readerLang = (() => { let v = null; try { v = localStorage.getItem(UI_KEY); } catch { /* private window */ } return v && (T[v] || NAMES[v]) ? v : I18N.guess(); })();
+  let ui = I18N.uiFor(readerLang);
   const AVAIL = (D.meta.langs && D.meta.langs.length) ? D.meta.langs : ['en'];
   const STALE = new Set(D.meta.stale || []);
+  // the paragraphs a language's translation has none for (store.assemble: a call that failed), by language; the app
+  // asks for them as the language is opened, and its menu can ask again
+  const GAPS = D.meta.gaps || {};
+  const gapTag = (code, t) => (GAPS[code] && !STALE.has(code) ? `<em class="stale">${esc(t.gaps_tag.replace('{n}', GAPS[code]))}</em>` : '');
+  // a document in Chinese or Japanese (store.assemble): the CJK rules below are its only, an English paper reads as before
+  const CJK_DOC = !!D.meta.cjk;
   const trOf = (x) => (lang !== 'en' && x && x.tr && x.tr[lang]) || null;   // a unit's or chunk's translation, if any
 
   const perf = (name, t0) => { if (window.__drPerf) window.__drPerf.push([name, Math.round((performance.now() - t0) * 10) / 10]); };
   const docEl = document.getElementById('doc');
   docEl.classList.add('doc');   // the page's CSS speaks of .doc, which the keyframes' sandbox is too
+  if (CJK_DOC) docEl.classList.add('cjk');
   const ghostEl = document.getElementById('ghosts');
   let level = 4;
   let lang = 'en';
@@ -55,13 +66,44 @@
   const headEls = [];                     // [chunk, heading element, stake element]
   D.chunks.forEach((c) => c.units.forEach((uid) => { chunkOf[uid] = c; }));
   const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch { /* private window */ } } };
+  // the type as this reader likes it, for every text (kept in this browser): its size, the column's width, the font
+  // of the author's words, the margins hidden, the colours and the line spacing (reader.css: --fs, html[data-width],
+  // html[data-font], html[data-hide]: the links and the conversations on the right, the reader's notes on the left;
+  // html[data-theme]: light or dark, the system's when none, and html[data-style]: the colours of either, the default's
+  // when none; --lh); set before anything is drawn, and changed from the Aa menu beside the language's
+  const TYPE_KEY = 'textfold.type';
+  const SIZES = [0.86, 0.93, 1, 1.08, 1.16, 1.25, 1.35], WIDTHS = ['narrow', 'standard', 'wide'], MARGINS = ['links', 'asks', 'notes'];
+  const MODES = ['auto', 'light', 'dark'], STYLES = ['default', 'paper'], LEADS = { tight: 0.9, standard: 1, loose: 1.15 };
+  const TYPE0 = { size: 1, width: 'standard', font: 'serif', hide: [], mode: 'auto', style: 'default', lead: 'standard' };
+  let type = (() => {
+    let v = null;
+    try { v = JSON.parse(store.get(TYPE_KEY) || 'null'); } catch { /* (written by hand) */ }
+    if (!v || typeof v !== 'object') return { ...TYPE0 };
+    return { size: SIZES.includes(v.size) ? v.size : 1, width: WIDTHS.includes(v.width) ? v.width : 'standard', font: v.font === 'sans' ? 'sans' : 'serif',
+      hide: Array.isArray(v.hide) ? MARGINS.filter((k) => v.hide.includes(k)) : [],
+      mode: MODES.includes(v.mode) ? v.mode : MODES.includes(v.theme) ? v.theme : 'auto',   // (theme: a demo's name for it)
+      style: STYLES.includes(v.style) ? v.style : v.theme === 'paper' ? 'paper' : 'default', lead: LEADS[v.lead] ? v.lead : 'standard' };
+  })();
+  function applyType() {
+    const r = document.documentElement;
+    if (type.size === 1) r.style.removeProperty('--fs'); else r.style.setProperty('--fs', String(type.size));
+    if (type.width === 'standard') delete r.dataset.width; else r.dataset.width = type.width;
+    if (type.font === 'serif') delete r.dataset.font; else r.dataset.font = type.font;
+    if (type.hide.length) r.dataset.hide = type.hide.join(' '); else delete r.dataset.hide;
+    if (type.mode === 'auto') delete r.dataset.theme; else r.dataset.theme = type.mode;
+    if (type.style === 'default') delete r.dataset.style; else r.dataset.style = type.style;
+    if (type.lead === 'standard') r.style.removeProperty('--lh'); else r.style.setProperty('--lh', String(LEADS[type.lead]));
+  }
+  applyType();
 
   // ── a unit in the current language ───────────────────────────────────
   function view(uid) {
     const u = U[uid];
     const z = trOf(u);
-    if (z) return { toks: z.toks, sents: z.sents, ev: u.lad.ev.filter((s) => s < z.sents.length), brief: z.lad.brief, tn: z.lad.tn, topic: z.lad.topic, p: `${lang}~` };
-    return { toks: u.toks, sents: u.sents, ev: u.lad.ev, brief: u.lad.brief, tn: u.lad.tn, topic: u.lad.topic, p: '' };
+    const l = z ? z.lad : u.lad;
+    // glue: the half of a sentence a page break left in the unit before this one (ladder.dress)
+    if (z) return { toks: z.toks, sents: z.sents, ev: u.lad.ev.filter((s) => s < z.sents.length), brief: l.brief, tn: l.tn, topic: l.topic, glue: l.glue, p: `${lang}~` };
+    return { toks: u.toks, sents: u.sents, ev: u.lad.ev, brief: l.brief, tn: l.tn, topic: l.topic, glue: l.glue, p: '' };
   }
 
   // ── pieces: what a unit shows at a level ─────────────────────────────
@@ -83,8 +125,26 @@
       for (const s of sents) {
         const [a, b] = v.sents[s];
         if (prevEnd !== null && a !== prevEnd) out.push({ id: `${p}gap${s}`, gap: true });
-        for (let i = a; i < b; i++) out.push({ id: p + i, i, tok: v.toks[i], lead: keep.has(i) });
+        for (let i = a; i < b; i++) {
+          if (!CJK_DOC) { out.push({ id: p + i, i, tok: v.toks[i], lead: keep.has(i) }); continue; }
+          const raw = v.toks[i], txt = raw && raw.t !== undefined ? raw.t : raw;
+          // a CJK footnote marker (①-⑩, ⑴-⒑, ⒈-⒑) glued into a sentence: dropped for display; a token that is
+          // nothing but markers is not rendered at all (Full keeps the text as written). † ‡ § ¶ are left alone:
+          // English papers use them as ordinary marks
+          const clean = String(txt).replace(/[①②③④⑤⑥⑦⑧⑨⑩⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑]/g, "");
+          if (!clean.trim()) continue;
+          out.push({ id: p + i, i, tok: clean === txt ? raw : (typeof raw === "string" ? clean : { ...raw, t: clean }), lead: keep.has(i) });
+        }
         prevEnd = b;
+      }
+      // the page break cut this sentence in two and the first half stays in the unit before: joined here, at the
+      // first word, so the sentence reads whole ("…的法律位阶为行政" + "法规，加强对…") and stays one line
+      if (v.glue) {
+        const first = out.find((x) => !x.gap && x.tok);
+        if (first) {
+          const tk = typeof first.tok === "string" ? { t: first.tok } : first.tok;
+          first.tok = { ...tk, t: v.glue + (tk.t || "") };
+        }
       }
     } else {
       // i: the token of the full text a written word came from (none for the model's own words)
@@ -94,7 +154,8 @@
         // topic words carry k, the takeaway word they slide from; a topic the model phrased itself may have none
         const inTopic = new Set(v.topic.map((t) => t.k).filter((k) => k !== undefined));
         out = brief.slice(0, v.tn).map((x, j) => ({ ...x, lead: inTopic.has(j) }));
-      } else out = v.topic.map((t, j) => ({ id: t.k !== undefined ? brief[t.k].id : `${p}t${j}`, i: t.k !== undefined ? brief[t.k].i : undefined, tok: t, lead: true }));
+      } else if (CJK_DOC && !v.tn) out = [];   // a takeaway that stepped down (ladder.fold_background): its topic with it
+      else out = v.topic.map((t, j) => ({ id: t.k !== undefined ? brief[t.k].id : `${p}t${j}`, i: t.k !== undefined ? brief[t.k].i : undefined, tok: t, lead: true }));
       if (mine && L > 0) {   // the reader's passages after the written line, in the author's words (same ids: they stay put)
         const used = new Set(out.map((x) => x.id));
         let prev = null;
@@ -172,6 +233,10 @@
   // the drawing itself, into the unit's element (or a copy of it: the keyframes' sandbox)
   function drawUnit(uid, L, el, map, hot) {
     el.dataset.l = L;
+    if (CJK_DOC) {   // an apparatus unit (footnote, contents line): not shown at all when folded, as written at Full
+      el.hidden = L < 4 && !pieces(uid, L).length;
+      if (el.hidden) { el._tx.replaceChildren(); return; }
+    }
     if (!hot) {
       el._tx.innerHTML = textHtml(uid, L);
       if (el._tx.querySelector('.texsrc')) texify(el._tx);
@@ -322,7 +387,11 @@
       if (b.k === 'h') {
         boxes.length = 0;
         const c = chunkById[b.chunk];
-        const cur = h('section', `chunk l${c.level}${c.units.length ? '' : ' empty'}`);
+        // An empty section whose title is a reference itself ([EB/OL], a URL): the converter read a footnote as a
+        // section heading. Full keeps it as written; every folded level drops the section, or Takeaway shows a
+        // block of quoted text where a heading should be
+        const ref = CJK_DOC && !c.units.length && /\[[A-Za-z]+\/OL\]|https?:\/\//.test(c.title || '');
+        const cur = h('section', `chunk l${c.level}${c.units.length ? '' : ' empty'}${ref ? ' ref' : ''}`);
         cur.dataset.chunk = c.id; cur.id = c.id;
         const hd = h('h2', 'hd'); hd.dataset.id = `h:${c.id}`;
         hd.hidden = !c.num && !c.title;   // a document's opening text has no heading of its own
@@ -410,12 +479,14 @@
       e.dataset.key = base && base.key ? '1' : '0';
       e.dataset.takeaway = base && base.takeaway ? '1' : '0';
     }
-    const t = T[ui], c = T[lang], m = D.meta;   // (c: the names of the paper's own parts, in the language it is read in)
+    if (mapReady) { renderTview(); mapKey = ''; if (mapShown) setTimeout(() => { if (mapShown) mapRender(); }); }
+    const t = T[ui], c = T[lang] || T.en, m = D.meta;   // (c: the names of the paper's own parts, in the language it is read in)
     document.documentElement.lang = I18N.htmlLang(lang);
     document.documentElement.dataset.lang = lang;
     mirrorLang();
-    const trTitle = lang !== 'en' && m.titles && m.titles[lang];
-    paperHead.innerHTML = `<h1>${esc(trTitle || m.title)}</h1>${trTitle ? `<div class="orig">${esc(m.title)}</div>` : ''}<div class="authors">${esc((m.authors || []).map(flipName).join(', '))}</div>` +
+    // the reader's name for it in the library (m.name), if they gave one, over its own title in this language
+    const trTitle = lang !== 'en' && m.titles && m.titles[lang], below = m.name ? trTitle || m.title : trTitle ? m.title : '';
+    paperHead.innerHTML = `<h1>${esc(m.name || trTitle || m.title)}</h1>${below ? `<div class="orig">${esc(below)}</div>` : ''}<div class="authors">${esc((m.authors || []).map(flipName).join(', '))}</div>` +
       (m.license || m.snapshot ? `<div class="license">${[m.license ? `<a href="${esc(m.license)}" target="_blank" rel="noopener">${esc(licenseName(m.license, t))}</a>` : '',
         m.snapshot ? esc(t.snapshot.replace('{date}', longDate(m.snapshot))) : ''].filter(Boolean).join(' · ')}</div>` : '');
     [...paperHead.children].forEach((c) => { c.dataset.id = `ph:${c.className || c.tagName}`; });
@@ -439,8 +510,10 @@
     const sum = docEl.querySelector('.bib summary'); if (sum) sum.textContent = c.refs;
     document.getElementById('hint').textContent = t.hint;
     document.querySelector('.tagline').textContent = t.tagline;
-    langBtn.innerHTML = `${esc(I18N.NATIVE[lang])}${STALE.has(lang) ? ` <em class="stale">${esc(t.stale)}</em>` : ''} <span class="caret">▾</span>`;
+    langBtn.innerHTML = `${esc(nameOf(lang))}${STALE.has(lang) ? ` <em class="stale">${esc(t.stale)}</em>` : gapTag(lang, t) ? ` ${gapTag(lang, t)}` : ''} <span class="caret">▾</span>`;
     langBtn.title = t.language;
+    typeBtn.title = t.ty_title; typeBtn.setAttribute('aria-label', t.ty_title);
+    if (!typeMenu.hidden) renderTypeMenu();
     bar.querySelectorAll('button').forEach((b) => { b.textContent = t.levels[+b.dataset.l]; });
     requestAnimationFrame(() => { geom = null; placeThumb(); });
     legend.replaceChildren();
@@ -449,7 +522,7 @@
     document.getElementById('back').textContent = `← ${t.back}`;
     for (const uid of unitEl.keys()) renderSide(uid);
     notesForLang();
-    if (window.DRApp) window.DRApp.onLang(lang, ui);
+    if (window.DRApp) window.DRApp.onLang(lang, readerLang);
   }
 
   // a page read from the web is a snapshot: the day it was read, in the interface's language ("6 October 2026")
@@ -466,6 +539,10 @@
   function renderStake(c, st) {
     const lad = (trOf(c) && trOf(c).lad) || c.lad;
     st.replaceChildren();
+    if (CJK_DOC) {   // no section stake: leave no empty row
+      st.hidden = !lad || !lad.take.length;
+      if (st.hidden) return;
+    }
     if (!lad) return;
     if (lad.scope_partial) st.append(h('span', 'scope-label', lang === 'zh' ? '已核查范围摘要 · ' : 'Selected-range summary · '));
     const mk = stakeMarks(c.id);
@@ -572,6 +649,7 @@
 
   // ── FLIP ─────────────────────────────────────────────────────────────
   let busy = false, queued = null;
+  let mapReady = false, mapShown = false;   // the Topic map drawn as a mind map (below): set up, and over the page now
 
   function visibleRect(el) {
     if (!el || !el.isConnected) return null;
@@ -697,6 +775,7 @@
   function done() {
     busy = false;
     document.documentElement.classList.remove('morphing');
+    if (mapReady) mapSync();
     relayout();
     refreshStale();
     warmSoon();
@@ -806,7 +885,7 @@
     if (pos !== goal) rafId = requestAnimationFrame(tick);
     else { lastT = 0; rest(); }
   }
-  const kick = () => { if (!rafId) rafId = requestAnimationFrame(tick); };
+  const kick = () => { if (mapShown) mapAway(); if (!rafId) rafId = requestAnimationFrame(tick); };
   function release() {   // the hand let go: spring to the level it was heading for
     holding = false;
     if (stage) { const d = pos - stage.last; goal = Math.max(0, Math.min(4, Math.abs(d) > 0.3 ? stage.last + Math.sign(d) : stage.last)); }
@@ -919,6 +998,13 @@
     return sheet;
   }
   function mirrorLang() { zhost.setAttribute('lang', document.documentElement.lang); zhost.dataset.lang = lang; }
+  // and the type's (applyType): the sandbox lays a level out with the page's rules for them (a sans-serif paragraph is
+  // smaller), and the stage hides the margins the page hides
+  function mirrorType() {
+    const r = document.documentElement;
+    for (const k of ['font', 'width', 'hide', 'theme', 'style']) { if (r.dataset[k]) zhost.dataset[k] = r.dataset[k]; else delete zhost.dataset[k]; }
+  }
+  mirrorType();
   // KaTeX's stylesheet, once the page has it (loaded, or carried inside), is wanted inside too (drawn formulas in the
   // copies and the sandbox)
   let katexInside = false;
@@ -1174,7 +1260,7 @@
       for (const c of node.children) { const k = copy(c); if (k) { el.append(k); any = true; } }
       return any || node.tagName === 'SECTION' || cl.contains('chunks') ? el : null;
     }
-    const root = h('div', 'doc');
+    const root = h('div', CJK_DOC ? 'doc cjk' : 'doc');
     root.dataset.level = L;
     for (const c of docEl.children) { const k = copy(c); if (k) root.append(k); }
     return { root, units, heads };
@@ -1481,7 +1567,7 @@
     if (!AVAIL.includes(l)) { if (window.DRApp) window.DRApp.generate(l, false); return; }
     if (busy) { queued = () => setLang(l); return; }
     store.set('dr-lang', l);
-    if (T[l]) { ui = l; store.set(UI_KEY, l); }   // the interface goes with the text
+    readerLang = l; ui = I18N.uiFor(l); store.set(UI_KEY, l);   // the interface goes with the text (in English when it has no words for it)
     if (D.app) history.replaceState(null, '', `?lang=${encodeURIComponent(l)}${location.hash}`);
     const hot = unitsNear(innerHeight * 1.5, innerHeight * 1.5);
     const band = level === 0 ? null : bandAround(defaultAnchor(), { 4: 30, 3: 45, 2: 60, 1: 150 }[level], hot);
@@ -1541,7 +1627,7 @@
     }
     if (tk === 'eq') {
       const el = edgeTarget(tk, id), tag = el && el.querySelector('.ltx_tag_equation');
-      return `<span class="where">${T[lang].eq}</span> ${esc(tag ? tag.textContent : '')}`;
+      return `<span class="where">${(T[lang] || T.en).eq}</span> ${esc(tag ? tag.textContent : '')}`;
     }
     return esc(id);
   }
@@ -1555,6 +1641,7 @@
     return ensureSide(uid);
   }
   function hostOf(key) {
+    if (key === '¶') return { el: paperHead, after: null };   // the whole paper: its head (the reader's notes on it)
     if (!key.startsWith('§')) return { el: unitEl.get(key), after: null };
     const s = secs.get(key.slice(1));
     return s ? { el: s.sec, after: s.hd } : null;
@@ -1590,7 +1677,8 @@
   function layoutSides() {
     const all = docEl.querySelectorAll('.side, .lside');
     for (const sd of all) sd.style.marginTop = '';
-    if (document.documentElement.classList.contains('compare') || !matchMedia(D.app ? '(min-width: 1300px)' : '(min-width: 1240px)').matches) return;   // beside the PDF: in the column
+    const root = document.documentElement;   // beside the PDF, or beside a pinned sidebar in a window too narrow for both: in the column
+    if (root.classList.contains('compare') || root.classList.contains('sb-narrow') || !matchMedia(D.app ? '(min-width: 1300px)' : '(min-width: 1240px)').matches) return;
     const moves = [];
     for (const col of ['.side', '.lside']) {   // the right margin, then the left: each stacks on its own
       const shown = [...docEl.querySelectorAll(col)].map((sd) => [sd, sd.getBoundingClientRect()]).filter(([, r]) => r.height)
@@ -1799,6 +1887,7 @@
   // what a change of notes redraws: the units, their margin, the keyframes (which hold the marks)
   function notesChanged(uids) {
     for (const uid of new Set(uids)) {
+      if (uid === '¶') { renderNoteCards(uid); continue; }   // the whole paper: the notes on it, by its head
       if (uid.startsWith('§')) {   // a section: its heading's mark, its summary's marks, its margins
         const sc = secs.get(uid.slice(1));
         if (!sc) continue;
@@ -2046,7 +2135,7 @@
   // a question note is a conversation about its passage: every turn asked there, and a field to ask the next
   const turnsOf = (n) => n.thread || (n.ask ? [n.ask] : []);
   function openNote(n, draft = false, back = '') {   // back: a question stopped, in the field again to be put right
-    if (whole(n.anchor)) { openChat(n, back); return; }   // a conversation about the whole paper lives in the chat
+    if (whole(n.anchor) && n.kind === 'ask') { openChat(n, back); return; }   // a conversation about the whole paper lives in the chat
     const was = popNote && popNote.id === n.id && npop.querySelector('.np-input'), typed = was ? was.value : '';   // (drawn again: what is written stays)
     popNote = n; popDraft = draft;
     const t = T[ui], a = n.anchor, ask = n.kind === 'ask';
@@ -2062,7 +2151,7 @@
     }
     npop.innerHTML = `<div class="np-quote"><span class="np-where">${esc(whereA(a))}</span> ${esc(a.quote.exact.length > 160 ? a.quote.exact.slice(0, 157) + '…' : a.quote.exact)}` +
       `${ask ? `<span class="np-at">${esc(askedAt(a))}</span>` : ''}</div>${body}` +
-      (draft ? '' : `<div class="np-acts">${!ask ? `<button type="button" data-act="ask">${esc(t.n_ask)}</button>` : ''}` +
+      (draft ? '' : `<div class="np-acts">${!ask && !whole(a) ? `<button type="button" data-act="ask">${esc(t.n_ask)}</button>` : ''}` +
         `<button type="button" data-act="link">${esc(t.n_copy)}</button><button type="button" data-act="del">${esc(t.n_delete)}</button></div>`);
     texify(npop);
     npop.hidden = false;
@@ -2172,7 +2261,7 @@
     if (popNote && popNote.id === n.id) openNote(note);
     if (chatNote && chatNote.id === n.id) openChat(note);
     let answered;
-    try { answered = await post('/api/ask', { paper: D.meta.id, id: note.id, question: q, ui, req: mine.req }, mine.ctl.signal); }
+    try { answered = await post('/api/ask', { paper: D.meta.id, id: note.id, question: q, ui: readerLang, req: mine.req }, mine.ctl.signal); }
     catch (err) {
       if (mine.ctl.signal.aborted || err.message === 'stopped') return;   // (stopAsk put it all back)
       answered = { ...note, thread: [...done, { q, a: '', lang: qlang, error: String(err.message || err).slice(0, 200) }] };
@@ -2300,10 +2389,12 @@
   function renderNoteCards(key) {
     const list = notesOf.get(key) || [], t = T[ui], host = hostOf(key);
     if (!host || !host.el) return;
-    const mine = list.filter((n) => n.kind !== 'ask' && n.text && n.text.trim()), asks = list.filter((n) => n.kind === 'ask');
+    // (the conversations about the whole paper live in the chat: its head carries the reader's own notes alone)
+    const mine = list.filter((n) => n.kind !== 'ask' && n.text && n.text.trim()), asks = key === '¶' ? [] : list.filter((n) => n.kind === 'ask');
     const card = (n) => {
       const c = h('button', `ncard${n.kind === 'ask' ? ' ask' : ''}`);
       c.type = 'button';
+      c.draggable = true;   // (into another app, with a link back: the drags, below)
       c.dataset.note = n.id;
       const turns = turnsOf(n), last = turns[turns.length - 1] || {}, said = [...turns].reverse().find((x) => x.a);
       c.innerHTML = n.kind === 'ask'
@@ -2340,7 +2431,7 @@
     return list.filter(holds).sort((x, y) => (y.updated || '').localeCompare(x.updated || ''))[0] || list[list.length - 1];
   }
 
-  // ── links to a note (#n=), and from the address to one ──
+  // ── links to a note (#n=), a paragraph (#u=) or a section (#s=), and from the address to one ──
   function noteLink(n) {
     const base = D.app ? `${location.origin}/p/${D.meta.id}?lang=${encodeURIComponent(lang)}` : location.href.split('#')[0];
     return `${base}#n=${n.id}`;
@@ -2348,14 +2439,339 @@
   function openFromHash() {
     const m = /[#&]n=([\w-]+)/.exec(location.hash), n = m && notes.find((x) => x.id === m[1]);
     const u = n ? n.anchor.unit : (/[#&]u=([^&]+)/.exec(location.hash) || [])[1];
-    const el = n && !n.anchor.unit ? targetEl(n.anchor) : u && unitEl.get(decodeURIComponent(u));
+    const s = !n && !u && (/[#&]s=([^&]+)/.exec(location.hash) || [])[1], sc = s && secs.get(decodeURIComponent(s));
+    const el = n && !n.anchor.unit ? targetEl(n.anchor) : u ? unitEl.get(decodeURIComponent(u)) : sc ? (sc.hd.hidden ? sc.sec : sc.hd) : null;
     if (!el && n) document.dispatchEvent(new CustomEvent('textfold-note-navigate', { detail: n, cancelable: true }));
     if (!el) return;
     if (el._stale) renderUnit(el.dataset.u, true);
     el.scrollIntoView({ block: 'center' });
-    flash(el);
-    if (n) setTimeout(() => openNote(n), 300);
+    // all that the link names, flashed together: a run of paragraphs (#u=<first>&to=<last>), a section with the
+    // subsections under it (#s=)
+    const to = !n && u && (/[#&]to=([^&]+)/.exec(location.hash) || [])[1];
+    const all = to ? unitsBetween(decodeURIComponent(u), decodeURIComponent(to)).map((x) => unitEl.get(x)) : sc ? sectionWith(sc.c).map((x) => secs.get(x.id).sec) : [el];
+    for (const x of all) { if (x._stale) renderUnit(x.dataset.u, true); flash(x); }
+    const tm = n && /[#&]t=(\d{1,3})(?:&|$)/.exec(location.hash);
+    if (n) setTimeout(() => { openNote(n); if (tm) showTurn(n, +tm[1]); }, 300);
   }
+  // the paragraphs from one to another, in reading order (either way round; the first alone when the other is not here)
+  function unitsBetween(a, b) {
+    const i = order.get(a), j = order.has(b) ? order.get(b) : i;
+    return i === undefined ? [] : IDS.slice(Math.min(i, j), Math.max(i, j) + 1);
+  }
+  // a section and the subsections under it, in order (the page keeps them side by side: a deeper one follows its own)
+  function sectionWith(c) {
+    const out = [c];
+    for (let j = D.chunks.indexOf(c) + 1; j < D.chunks.length && (D.chunks[j].level || 2) > (c.level || 2); j++) out.push(D.chunks[j]);
+    return out;
+  }
+  // one turn of a conversation, in the chat or in the note's window, brought into view (#n=<id>&t=<turn>)
+  function showTurn(n, k) {
+    const box = !chat.hidden && chatNote === n ? chat.querySelector('.ch-body') : popNote === n ? npop : null;
+    const turn = box && box.querySelectorAll(':scope > .np-turn')[k];
+    if (!turn) return;
+    box.scrollTop += turn.getBoundingClientRect().top - box.getBoundingClientRect().top - 8;
+    flash(turn);
+  }
+
+  // ── dragged into another app (a notes app, an editor): what was dragged, as it reads, with a textfold:// link back to
+  //    exactly there (docs/drag-format.md). A paragraph, a heading or a section's summary shows a handle while the
+  //    pointer is on it, so its text stays selectable, and so does each message of a conversation (the chat, a note's
+  //    window); on the Topic map a section's card is dragged whole; a note's card and a selection are dragged as they
+  //    are. One listener for every drag; the handle is outside the column, so the zoom's copies never hold it ──
+  const LEVEL_NAMES = ['topic', 'takeaway', 'key', 'brief', 'full'];
+  const handle = h('div', 'draghandle');
+  handle.draggable = true;
+  handle.hidden = true;
+  const dragImg = h('div', 'dragimg');   // what the pointer carries: a line of what goes, not the whole paragraph
+  document.body.append(handle, dragImg);
+  let handleFor = null, handleTimer = 0;
+  const HANDLED = '.u, .hd, .stake', SAID = '.np-q, .np-a';   // in the column; in a conversation
+  function placeHandle(el, again = false) {
+    clearTimeout(handleTimer);
+    if (el === handleFor && !handle.hidden && !again) return;
+    const r = el.getBoundingClientRect();
+    if (!r.height) return;
+    const said = el.matches(SAID);
+    handleFor = el;
+    handle.classList.toggle('slim', said);   // (in a conversation's margin, which is narrow)
+    // (an item of a list: beside its list, where a paragraph's is, not over its number, which stands left of the item)
+    const left = el.matches('li') ? el.parentElement.getBoundingClientRect().left : r.left;
+    handle.style.left = `${Math.max(2, left - (said ? 12 : 22))}px`;
+    handle.style.top = `${r.top + 2}px`;
+    handle.hidden = false;
+  }
+  function hideHandle(now) {
+    clearTimeout(handleTimer);
+    if (now) { handle.hidden = true; handleFor = null; } else handleTimer = setTimeout(() => hideHandle(true), 220);
+  }
+  // (on a move, not on entering: a pointer that rested on a paragraph through a zoom gets its handle once it moves; on
+  // the Topic map, none: its cards are dragged whole)
+  docEl.addEventListener('mousemove', (e) => {
+    if (level === 0 || busy || stage || (!handle.hidden && handleFor && handleFor.contains(e.target))) return;
+    const el = e.target.closest(HANDLED);
+    if (el && !el.hidden) placeHandle(el);
+  }, { passive: true });
+  for (const box of [chat, npop]) box.addEventListener('mousemove', (e) => {
+    if (!handle.hidden && handleFor && handleFor.contains(e.target)) return;
+    const el = e.target.closest(SAID);
+    if (el) placeHandle(el);
+  }, { passive: true });
+  for (const box of [docEl, chat, npop]) box.addEventListener('mouseout', (e) => {
+    const el = e.target.closest(box === docEl ? HANDLED : SAID);
+    if (el && el === handleFor && !el.contains(e.relatedTarget) && e.relatedTarget !== handle) hideHandle();
+  });
+  handle.addEventListener('mouseenter', () => clearTimeout(handleTimer));
+  handle.addEventListener('mouseleave', () => hideHandle());
+  // a zoom or a key moves what it stood by: it comes back with the pointer; a scroll (the page's, the chat's) takes it
+  // along, once a frame, while no zoom runs
+  const hideNow = () => { if (!handle.hidden) hideHandle(true); };
+  for (const ev of ['wheel', 'keydown', 'resize']) addEventListener(ev, hideNow, { passive: true });
+  let follow = false;
+  addEventListener('scroll', () => {
+    if (handle.hidden || follow) return;
+    follow = true;
+    requestAnimationFrame(() => { follow = false; if (handle.hidden) return; if (busy || stage || !handleFor || !handleFor.isConnected) hideNow(); else placeHandle(handleFor, true); });
+  }, { passive: true, capture: true });
+  addEventListener('pointerdown', (e) => { if (e.target !== handle) hideNow(); }, { passive: true });
+
+  // the Topic map: a section's card is dragged whole, grabbed anywhere (a click on a chip still opens it). It is made
+  // draggable as it is pressed, and only then, so the words of a paragraph opened in it stay selectable
+  let pressed = null;
+  docEl.addEventListener('mousedown', (e) => {
+    if (level !== 0 || e.button !== 0 || busy || stage) return;
+    const card = e.target.closest('section.chunk'), u = e.target.closest('.u');
+    if (!card || (u && u.dataset.l !== '0') || e.target.closest('a, button, details')) return;
+    card.draggable = true;
+    pressed = card;
+  });
+  const unpress = () => { if (pressed) { pressed.removeAttribute('draggable'); pressed = null; } };
+  addEventListener('mouseup', unpress);
+  addEventListener('dragend', unpress);
+
+  // pieces as plain text: a formula as $LaTeX$, a gap as … (a CJK document's word may be a bare string)
+  const piecesText = (pcs) => pcs.map((p, n) => (p.gap ? '…' : typeof p.tok === 'string' ? p.tok : tokPlain(p.tok)) + (n < pcs.length - 1 && (p.gap || p.tok.s || pcs[n + 1].gap) ? ' ' : '')).join('').replace(/\s+/g, ' ').trim();
+  const secTitle = (c) => ((trOf(c) && trOf(c).title) || c.title || '').replace(/\s+/g, ' ').trim();
+  const secOfEl = (el) => [...secs.values()].find((x) => x.hd === el || x.st === el);
+  const secOfNote = (n) => (n.anchor && n.anchor.section ? (secs.get(n.anchor.section) || {}).c || null : null);
+  // the selection's words as they read: a formula of the paper as $LaTeX$, one the model wrote as its source, never the
+  // hidden source the page also holds; in a conversation, a citation as its label in brackets, as the exports write it,
+  // and none of the buttons around the words
+  function selectionText(range) {
+    const f = range.cloneContents();
+    for (const at of f.querySelectorAll('[data-id*="@"]')) { const k = at.dataset.id.split('@')[1].split('#')[0]; if (A[k]) at.replaceWith(tokPlain({ a: k })); }
+    for (const k of f.querySelectorAll('.katex')) { const src = k.querySelector('annotation'); k.replaceWith(src ? `$${src.textContent}$` : k.textContent); }
+    for (const x of f.querySelectorAll('math')) x.replaceWith(x.getAttribute('alttext') ? `$${x.getAttribute('alttext')}$` : x.textContent);
+    for (const x of f.querySelectorAll('.np-cite.in, .np-inf')) x.replaceWith(` (${x.textContent.trim()})`);
+    for (const x of f.querySelectorAll('.np-cite.bad, .np-tdel, .np-next, .ch-try')) x.remove();
+    for (const x of f.querySelectorAll('.num')) x.after(' ');   // (a heading's number, set apart by its margin)
+    return f.textContent.replace(/[\u200b\s]+/g, ' ').trim();
+  }
+  const headingOf = (c) => `${c.num || ''} ${secTitle(c)}`.trim();
+  const summaryOf = (c) => { const lad = (trOf(c) && trOf(c).lad) || c.lad; return lad && lad.take.length ? toksText(lad.take, 0, lad.take.length - 1) : ''; };
+  // what a handle's paragraph, heading or summary gives (a heading: its whole section)
+  function itemDrag(el) {
+    if (el.classList.contains('u')) {
+      const uid = el.dataset.u, L = levelOf(uid);
+      return { kind: 'paragraph', uid, c: chunkOf[uid] || null, L, text: piecesText(pieces(uid, L)), written: L <= 2, units: [uid] };
+    }
+    const sc = secOfEl(el);
+    if (!sc) return null;
+    if (el === sc.st) return { kind: 'summary', c: sc.c, L: level, text: summaryOf(sc.c), written: true };
+    return sectionDrag(sc.c);
+  }
+  // a section as it reads at the level shown: its summary (where the level shows it, Key and Takeaway), then its
+  // paragraphs, a bullet each at the written levels, a paragraph each at Brief and Full; and so through the subsections
+  // under it, each after its own heading
+  function sectionDrag(c) {
+    const written = level <= 2, blocks = [], units = [];
+    for (const x of sectionWith(c)) {
+      const head = [x === c ? '' : headingOf(x), level >= 1 && written ? summaryOf(x) : ''].filter(Boolean), paras = [];
+      for (const uid of x.units) {
+        const t = unitEl.has(uid) ? piecesText(pieces(uid, levelOf(uid))) : '';
+        if (t) { paras.push(t); units.push(uid); }
+      }
+      if (written) blocks.push([...head, ...paras.map((t) => `- ${t}`)].join('\n'));
+      else blocks.push(...head, ...paras);
+    }
+    return { kind: 'section', c, L: level, heading: headingOf(c), text: blocks.filter(Boolean).join('\n\n'), written, units };
+  }
+  // a section's card on the Topic map: its topic, then the topics of its paragraphs (its chips), as the map reads
+  function cardDrag(card) {
+    const sc = secs.get(card.dataset.chunk);
+    if (!sc) return null;
+    const c = sc.c, lad = (trOf(c) && trOf(c).lad) || c.lad;
+    const topic = lad && lad.topic ? lad.topic.filter((i) => lad.take[i]).map((i) => tokPlain(lad.take[i]) + (lad.take[i].s ? ' ' : '')).join('').trim() : '';
+    const units = c.units.filter((uid) => unitEl.has(uid) && piecesText(pieces(uid, 0)));
+    const chips = units.map((uid) => piecesText(pieces(uid, 0)));
+    return { kind: 'section', c, L: 0, heading: headingOf(c), text: [topic, chips.join(' · ')].filter(Boolean).join('\n'), written: true, units };
+  }
+  // a note's card, or its row in the notes list: a highlight or a note (its quote, and the reader's words), or a
+  // conversation (the reader's question, and the model's answer in one sentence)
+  function noteDrag(n) {
+    const a = n.anchor || {}, quote = (a.quote && a.quote.exact) || '', c = secOfNote(n);
+    if (n.kind === 'ask') {
+      const turns = turnsOf(n), said = [...turns].reverse().find((x) => x.a);
+      return { kind: 'ask', note: n, c, L: level, text: said ? said.takeaway || '' : '', written: !!said, quote, comment: (turns[0] || {}).q || '' };
+    }
+    const comment = (n.text || '').trim();
+    return { kind: 'note', note: n, c, L: level, text: comment || quote, written: !comment && a.on === 'summary', quote, comment };
+  }
+  // one message of a conversation, in the chat or a note's window: its question, or its answer (its Markdown, a
+  // citation as its label), or words selected in it; with the turn, so the link opens there
+  function turnDrag(el, words = '') {
+    const inChat = chat.contains(el), n = inChat ? chatNote : popNote, turnEl = el && el.closest('.np-turn');
+    if (!n) return null;
+    if (!turnEl || n.kind !== 'ask') return inChat ? null : noteDrag(n);   // (the passage over a note's window)
+    const k = [...turnEl.parentElement.querySelectorAll(':scope > .np-turn')].indexOf(turnEl), x = turnsOf(n)[k];
+    if (!x) return null;
+    const answer = !!el.closest('.np-a'), a = n.anchor || {};
+    return { kind: 'ask', note: n, turn: k, part: answer ? 'a' : 'q', c: secOfNote(n), L: level, text: words || (answer ? answerText(x.a).trim() : x.q),
+      written: answer, quote: (a.quote && a.quote.exact) || '', comment: answer ? x.q : '' };
+  }
+  // a selection: its words, a paragraph each (a heading or a summary it crosses too), and every paragraph it touches;
+  // the link names them from the first to the last (in one paragraph, that paragraph; in headings alone, the section)
+  function selectionDrag(range) {
+    const parts = [];
+    for (const el of docEl.querySelectorAll('.hd, .stake, .u')) {
+      const box = el.classList.contains('u') ? el._tx : el;
+      if (!box || el.hidden || !range.intersectsNode(box) || !box.getClientRects().length) continue;   // (a summary the level does not show)
+      const r = range.cloneRange();
+      if (!box.contains(range.startContainer)) r.setStart(box, 0);
+      if (!box.contains(range.endContainer)) r.setEnd(box, box.childNodes.length);
+      const text = selectionText(r);
+      if (text) parts.push({ el, uid: el.classList.contains('u') ? el.dataset.u : null, text });
+    }
+    if (!parts.length) return null;
+    const units = parts.filter((x) => x.uid).map((x) => x.uid), text = parts.map((x) => x.text).join('\n\n');
+    const sc = units.length ? null : secOfEl(parts[0].el);
+    if (!units.length && !sc) return null;
+    const L = units.length ? levelOf(units[0]) : level;
+    return { kind: 'selection', uid: units[0] || null, to: units.length > 1 ? units[units.length - 1] : null, c: units.length ? chunkOf[units[0]] || null : sc.c, L, text,
+      written: units.some((x) => levelOf(x) <= 2) || parts.some((x) => x.el.classList.contains('stake')), quote: text, units };
+  }
+  function dragData(d) {
+    const m = D.meta, title = m.name || (lang !== 'en' && m.titles && m.titles[lang]) || m.title, c = d.c;
+    const q = new URLSearchParams({ paper: m.id });
+    if (d.note) { q.set('n', d.note.id); if (d.turn !== undefined) q.set('t', d.turn); } else if (d.uid) { q.set('u', d.uid); if (d.to) q.set('to', d.to); } else if (c) q.set('s', c.id);
+    if (!d.note) q.set('level', LEVEL_NAMES[d.L]);
+    q.set('lang', lang);
+    const link = `textfold://open?${q}`, citekey = m.zotero && m.zotero.citekey;
+    const json = { format: 'textfold/drag', version: 1, paper: m.id, title, authors: m.authors || [], ...(citekey ? { citekey } : {}),
+      section: c ? { id: c.id, num: c.num || '', title: secTitle(c) } : null, ...(d.heading ? { heading: d.heading } : {}), kind: d.kind, level: LEVEL_NAMES[d.L], lang,
+      text: d.text, written: d.written, ...(d.units ? { units: d.units } : {}), ...(d.quote ? { quote: d.quote } : {}), ...(d.comment ? { comment: d.comment } : {}), link };
+    const where = c ? `${title} › ${`${c.num || ''} ${secTitle(c)}`.trim()}` : title;
+    // after the quote: a note's text, or a conversation's question (in bold) and its answer (Markdown, the model's)
+    const said = (d.part === 'q' ? [[d.text, true]] : d.kind === 'ask' ? [[d.comment, true], [d.text, false, true]] : d.kind === 'note' ? [[d.comment]] : []).filter(([x]) => x);
+    const shown = d.kind === 'note' || d.kind === 'ask' ? d.quote : d.text;
+    // the quote: each line a paragraph of it, bullets that follow one another one list
+    const bullet = (l) => l.startsWith('- ');
+    const quoted = (x) => x.split('\n').map((l, i, a) => (i && l && a[i - 1] && !(bullet(l) && bullet(a[i - 1])) ? '>\n' : '') + (l ? `> ${l}` : '>')).join('\n');
+    const md = [shown ? quoted(shown) : '', ...said.map(([x, b]) => (b ? `**${x}**` : x)),
+      `— [${where.replace(/([[\]])/g, '\\$1')}](${link})`].filter(Boolean).join('\n\n');
+    const para = (x, b, md) => (md ? mdLite(x) : `<p>${b ? '<strong>' : ''}${esc(x).replace(/\n/g, '<br>')}${b ? '</strong>' : ''}</p>`);
+    const blocks = (x) => x.split(/\n{2,}/).map((blk) => blk.split('\n').reduce((h, l) => (bullet(l)
+      ? (h.endsWith('</ul>') ? h.slice(0, -5) : `${h}<ul>`) + `<li>${esc(l.slice(2))}</li></ul>` : `${h}<p>${esc(l)}</p>`), '')).join('');
+    const html = `<div data-textfold="${esc(JSON.stringify(json))}">${shown ? `<blockquote>${blocks(shown)}</blockquote>` : ''}` +
+      `${said.map(([x, b, md]) => para(x, b, md)).join('')}<p>— <a href="${esc(link)}">${esc(where)}</a></p></div>`;
+    return { md, html, link, json: JSON.stringify(json), label: (d.heading || d.text || shown || where).replace(/\s+/g, ' ').slice(0, 90) };
+  }
+  document.addEventListener('dragstart', (e) => {
+    const t = e.target.nodeType === 1 ? e.target : e.target.parentElement, sel = getSelection();
+    const range = sel.rangeCount && !sel.isCollapsed ? sel.getRangeAt(0) : null;
+    let d = null;
+    if (e.target === handle) d = handleFor && handleFor.isConnected ? (handleFor.matches(SAID) ? turnDrag(handleFor) : itemDrag(handleFor)) : null;
+    else if (t && t === pressed) d = cardDrag(t);
+    else if (t && t.closest('.ncard[data-note], .nl-item[data-note]')) {
+      const id = t.closest('[data-note]').dataset.note, n = notes.find((x) => x.id === id);
+      d = n && noteDrag(n);
+    } else if (t && range && range.intersectsNode(e.target)) {
+      if (docEl.contains(t)) d = selectionDrag(range);
+      else if (chat.contains(t) || npop.contains(t)) {   // (words of a conversation: the message they start in)
+        const s0 = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+        d = turnDrag(s0.closest('.np-turn') ? s0 : t, selectionText(range));
+      }
+    }
+    if (!d) return;
+    const out = dragData(d), dt = e.dataTransfer;
+    dt.clearData();
+    dt.setData('text/plain', out.md);
+    dt.setData('text/uri-list', out.link);
+    dt.setData('text/html', out.html);
+    dt.setData('application/x-textfold+json', out.json);
+    dt.effectAllowed = 'copy';
+    if (e.target === handle) { dragImg.textContent = out.label; dt.setDragImage(dragImg, 12, 12); }
+  });
+
+  // ── the type's menu (Aa): the size a step at a time (its percentage: the usual size again), the column's width and
+  //    the font. Each change shows at once, the paragraph being read kept where it was on the screen ──
+  const typePick = h('div', 'typepick');
+  const typeBtn = h('button', 'typebtn', '<span aria-hidden="true">Aa</span>');
+  typeBtn.type = 'button';
+  typeBtn.setAttribute('aria-haspopup', 'dialog');
+  typeBtn.setAttribute('aria-expanded', 'false');
+  const typeMenu = h('div', 'langmenu typemenu');
+  typeMenu.hidden = true;
+  typeMenu.setAttribute('role', 'dialog');
+  typePick.append(typeBtn, typeMenu);
+  const isType0 = () => type.size === TYPE0.size && type.width === TYPE0.width && type.font === TYPE0.font && !type.hide.length
+    && type.mode === TYPE0.mode && type.style === TYPE0.style && type.lead === TYPE0.lead;
+  function renderTypeMenu() {
+    const t = T[ui], k = SIZES.indexOf(type.size);
+    const seg = (key, vals, names) => `<div class="ty-seg" role="radiogroup" aria-label="${esc(t[`ty_${key}`])}">` +
+      vals.map((v, i) => `<button type="button" role="radio" aria-checked="${type[key] === v}" data-${key}="${v}">${esc(names[i])}</button>`).join('') + '</div>';
+    typeMenu.setAttribute('aria-label', t.ty_title);
+    typeMenu.innerHTML = `<div class="ty-row"><span class="ty-l">${esc(t.ty_mode)}</span>${seg('mode', MODES, [t.ty_auto, t.ty_light, t.ty_dark])}</div>` +
+      `<div class="ty-row"><span class="ty-l">${esc(t.ty_style)}</span>${seg('style', STYLES, [t.ty_default, t.ty_paper])}</div>` +
+      `<div class="ty-row"><span class="ty-l">${esc(t.ty_size)}</span><div class="ty-size">` +
+      `<button type="button" class="ty-a sm" data-step="-1" aria-label="${esc(t.ty_smaller)}" title="${esc(t.ty_smaller)}"${k === 0 ? ' disabled' : ''}>A</button>` +
+      `<button type="button" class="ty-pct" data-step="0" title="${esc(t.ty_usual)}">${Math.round(type.size * 100)}%</button>` +
+      `<button type="button" class="ty-a lg" data-step="1" aria-label="${esc(t.ty_larger)}" title="${esc(t.ty_larger)}"${k === SIZES.length - 1 ? ' disabled' : ''}>A</button></div></div>` +
+      `<div class="ty-row"><span class="ty-l">${esc(t.ty_font)}</span>${seg('font', ['serif', 'sans'], [t.ty_serif, t.ty_sans])}</div>` +
+      `<div class="ty-row"><span class="ty-l">${esc(t.ty_lead)}</span>${seg('lead', Object.keys(LEADS), [t.ty_tight, t.ty_standard, t.ty_loose])}</div>` +
+      `<div class="ty-row ty-wrow"><span class="ty-l">${esc(t.ty_width)}</span>${seg('width', WIDTHS, [t.ty_narrow, t.ty_standard, t.ty_wide])}</div>` +
+      `<div class="ty-row"><span class="ty-l">${esc(t.ty_margin)}</span><div class="ty-seg ty-checks" role="group" aria-label="${esc(t.ty_margin)}">` +
+      MARGINS.map((k) => `<button type="button" aria-pressed="${!type.hide.includes(k)}" data-margin="${k}">${esc(t[`ty_m_${k}`])}</button>`).join('') + '</div></div>' +
+      `<div class="ty-foot"><button type="button" class="ty-focus" data-focus="1">${esc(focusOn ? t.ty_focus_off : t.ty_focus)}<kbd>F</kbd></button>` +
+      `<button type="button" class="ty-reset"${isType0() ? ' hidden' : ''}>${esc(t.ty_reset)}</button></div>`;
+  }
+  function setType(next) {
+    if (busy) return;   // (not while a zoom plays)
+    snapNow();
+    const anchor = defaultAnchor();
+    type = { ...type, ...next };
+    store.set(TYPE_KEY, JSON.stringify(type));
+    applyType(); mirrorType();
+    settle(anchor);
+    capEpoch++; relayout(); geom = null; placeThumb(); warmSoon();
+  }
+  function closeTypeMenu() { typeMenu.hidden = true; typeBtn.setAttribute('aria-expanded', 'false'); }
+  typeBtn.addEventListener('click', () => {
+    if (!typeMenu.hidden) return closeTypeMenu();
+    closeLangMenu();
+    renderTypeMenu(); typeMenu.hidden = false; typeBtn.setAttribute('aria-expanded', 'true');
+  });
+  typeMenu.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b || b.disabled) return;
+    const k = SIZES.indexOf(type.size), d = +b.dataset.step;
+    if (b.dataset.step) setType({ size: d ? SIZES[Math.max(0, Math.min(SIZES.length - 1, k + d))] : 1 });
+    else if (b.dataset.width) setType({ width: b.dataset.width });
+    else if (b.dataset.font) setType({ font: b.dataset.font });
+    else if (b.dataset.mode) setType({ mode: b.dataset.mode });
+    else if (b.dataset.style) setType({ style: b.dataset.style });
+    else if (b.dataset.lead) setType({ lead: b.dataset.lead });
+    else if (b.dataset.focus) { closeTypeMenu(); setFocus(!focusOn); return; }
+    else if (b.dataset.margin) { const k = b.dataset.margin; setType({ hide: MARGINS.filter((x) => (x === k) !== type.hide.includes(x)) }); }
+    else setType({ ...TYPE0 });
+    // drawn anew: the key that was pressed keeps the focus (the reset, gone: the first)
+    const sel = b.dataset.step ? `[data-step="${b.dataset.step}"]` : b.dataset.width ? `[data-width="${b.dataset.width}"]` : b.dataset.font ? `[data-font="${b.dataset.font}"]`
+      : b.dataset.margin ? `[data-margin="${b.dataset.margin}"]` : b.dataset.mode ? `[data-mode="${b.dataset.mode}"]` : b.dataset.style ? `[data-style="${b.dataset.style}"]` : b.dataset.lead ? `[data-lead="${b.dataset.lead}"]` : null;
+    renderTypeMenu();
+    const again = (sel && typeMenu.querySelector(sel)) || typeMenu.querySelector('button');
+    if (again && !again.disabled) again.focus(); else typeMenu.querySelector('.ty-pct').focus();
+  });
+  // (by where the click was when it happened: the menu is drawn anew by its own clicks)
+  addEventListener('click', (e) => { if (!typeMenu.hidden && !e.composedPath().includes(typePick)) closeTypeMenu(); });
 
   // ── the notes button: how many, and the exports ──
   const nbtn = h('button', 'notesbtn');
@@ -2375,7 +2791,7 @@
     store.set('dr-keep-mine', keepMine ? '1' : '0');
     notesChanged([...notesOf.keys()]);
   });
-  (document.querySelector('.langpick') || document.getElementById('langbtn')).before(npick);
+  (document.querySelector('.langpick') || document.getElementById('langbtn')).before(npick, typePick);
   function updateNotesBtn() {
     const t = T[ui], n = notes.filter((x) => shown(x.anchor)).length;
     nbtn.hidden = false;   // always there: the exports (the paper as PDF too) are in its menu
@@ -2408,15 +2824,16 @@
       if (g && g !== sec) { sec = g; items += `<div class="nl-sec">${esc(g)}</div>`; }
       const body = k === 'ask'
         ? `<b>${esc((turns[0] || {}).q || '')}</b>${said ? `<span class="nl-a">${texLite(clipTex(said.takeaway, 120))}</span>` : ''}${a.quote.exact ? `<span class="nl-q">“${texLite(clipTex(a.quote.exact, 80))}”</span>` : ''}`
-        : k === 'note' ? `<span class="nl-t">${esc(clip(n.text.trim(), 150))}</span><span class="nl-q">“${texLite(clipTex(a.quote.exact, 80))}”</span>`
+        : k === 'note' ? `<span class="nl-t">${esc(clip(n.text.trim(), 150))}</span>${a.quote.exact ? `<span class="nl-q">“${texLite(clipTex(a.quote.exact, 80))}”</span>` : ''}`
         : `<span class="nl-hl">${texLite(clipTex(a.quote.exact, 150))}</span>`;
       const sure = nmSure === n.id;
-      items += `<div class="nl-item ${k}" data-note="${esc(n.id)}"><button type="button" class="nl-go">${body}</button>` +
+      items += `<div class="nl-item ${k}" draggable="true" data-note="${esc(n.id)}"><button type="button" class="nl-go">${body}</button>` +
         `<button type="button" class="nl-del${sure ? ' sure' : ''}" title="${esc(sure ? t.n_del_sure : t.n_delete)}">${sure ? esc(t.n_del_sure) : '×'}</button></div>`;
     }
     const tab = (f, label) => `<button type="button" class="nl-tab${nmFilter === f ? ' on' : ''}" data-f="${f}">${esc(label)}<em>${count[f]}</em></button>`;
     const list = nmenu.querySelector('.nl-list'), top = list ? list.scrollTop : 0;
-    nmenu.innerHTML = `<div class="nl-tabs">${tab('all', t.n_all)}${tab('hl', t.n_highlight)}${tab('note', t.n_note)}${tab('ask', t.n_ask)}</div>` +
+    nmenu.innerHTML = `<div class="nl-tabs">${tab('all', t.n_all)}${tab('hl', t.n_highlight)}${tab('note', t.n_note)}${tab('ask', t.n_ask)}` +
+      `<button type="button" class="nl-new" data-x="card" title="${esc(t.n_card_tip)}">＋ ${esc(t.n_card)}</button></div>` +
       `<div class="nl-list">${items || `<div class="nm-note">${esc(t.n_none)}</div>`}</div>` +
       `<div class="nl-x"><button type="button" class="lm-item" data-x="save"><span>${esc(t.sv_save)}…</span></button></div>` +
       (D.app ? '' : `<div class="nm-note">${esc(t.n_local)}</div>`);
@@ -2446,16 +2863,27 @@
     if (n) { nmenu.hidden = true; flyToNote(n); return; }
     if (nmSure) { nmSure = null; renderNotesMenu(); }
     if (e.target.closest('[data-x="save"]')) openSave();
+    if (e.target.closest('[data-x="card"]')) { nmenu.hidden = true; newCard(); }
   });
   addEventListener('click', (e) => { if (!nmenu.hidden && !e.target.closest('.notesmenu')) nmenu.hidden = true; });
   // after any zoom under way (and a moment more)
   const afterZoom = (fn, wait = 0) => setTimeout(function tick() { if (busy) setTimeout(tick, 80); else fn(); }, wait);
   // a note from the list: the page flies to its passage (from the map, it first steps in to Key), opens the paragraph
   // to its full text in place where the zoom hides the passage, and opens the note there; Back returns
+  // a note of the reader's own on the whole paper, not on a passage: written in a card by the paper's head (kept once
+  // it has words; an empty one goes when it closes)
+  function newCard() {
+    if (popNote) closeNote();
+    scrollTo({ top: 0, behavior: 'smooth' });   // (the head opens the page)
+    const n = { id: noteId(), kind: 'note', text: '', thread: [],
+      anchor: { unit: null, section: null, on: 'paper', lang, level, tokens: null, sents: null, quote: { exact: '' } } };
+    afterZoom(() => openNote(n, true), 260);
+  }
   function flyToNote(n) {
     if (!document.dispatchEvent(new CustomEvent('textfold-note-navigate', { detail: n, cancelable: true }))) return;
     const a = n.anchor, from = { y: scrollY, level, from: null };
-    if (whole(a)) { openChat(n); return; }
+    if (whole(a) && n.kind === 'ask') { openChat(n); return; }
+    if (whole(a)) { if (popNote) closeNote(); scrollTo({ top: 0, behavior: 'smooth' }); afterZoom(() => openNote(n), 260); return; }
     if (busy || !targetEl(a)) return;
     if (popNote) closeNote();
     const fly = () => {
@@ -2491,30 +2919,86 @@
   }
   // Markdown for Obsidian: a note per paper; each highlight a quote with a block id (^n-…) other notes can link to,
   // each question a callout; every one links back to its place in the reader
-  function notesMarkdown(kinds, para) {
-    const m = D.meta, t = T[ui], q = (s) => JSON.stringify(String(s || ''));
-    const out = ['---', `title: ${q(m.title)}`, `authors: ${JSON.stringify(m.authors || [])}`,
+  const mdQuote = (s) => s.split('\n').map((l) => `> ${l}`);
+  // a Markdown file's head: its properties (Obsidian's), the title, the byline
+  function mdHead(title, props, format) {
+    const m = D.meta, q = (s) => JSON.stringify(String(s || ''));
+    return ['---', `title: ${q(m.title)}`, `authors: ${JSON.stringify(m.authors || [])}`,
       m.abs_url ? `arxiv: ${q(m.id + (m.version || ''))}` : `source: ${q(sourceName(m))}`,
       ...(m.abs_url ? [`url: ${m.abs_url}`] : []), ...(m.snapshot ? [`snapshot: ${m.snapshot}`] : []), `license: ${m.license || ''}`, ...(D.app ? [`reader: ${location.origin}/p/${m.id}`] : []),
-      `exported: ${new Date().toISOString().slice(0, 10)}`, `tags: [${PAPER ? 'paper' : 'text'}]`, 'format: textfold/notes@1', '---', '',
-      `# ${m.title}`, '', [(m.authors || []).map(flipName).join(', '), m.abs_url ? `[${sourceName(m)}](${m.abs_url})` : sourceName(m)].filter(Boolean).join(' · '), ''];
+      ...props, `exported: ${new Date().toISOString().slice(0, 10)}`, `tags: [${PAPER ? 'paper' : 'text'}]`, ...(format ? [`format: ${format}`] : []), '---', '',
+      `# ${title}`, '', ...(title !== m.title ? [`*${m.title}*`, ''] : []),
+      [(m.authors || []).map(flipName).join(', '), m.abs_url ? `[${sourceName(m)}](${m.abs_url})` : sourceName(m)].filter(Boolean).join(' · '), ''];
+  }
+  // one note: its passage quoted (or the whole paragraph around it), its block id, the reader's words, the link back;
+  // a conversation as one callout, the first question as its title, each later one in bold
+  function noteMd(n, para) {
+    const out = [], said = n.kind === 'ask' ? turnsOf(n).filter((x) => x.a) : [];
+    if (said.length) {
+      const around = para && paraOf(n.anchor, true);
+      out.push(...mdQuote(`[!question] ${said[0].q}`), ...(around ? mdQuote(around) : n.anchor.quote.exact ? mdQuote(`*${n.anchor.quote.exact}*`) : []));
+      said.forEach((x, k) => out.push('>', ...(k ? mdQuote(`**${x.q}**`) : []), ...(k ? ['>'] : []), ...mdQuote(answerText(x.a)), '>', ...mdQuote(`→ ${x.takeaway}`)));
+    } else if (!whole(n.anchor)) out.push(...mdQuote((para && paraOf(n.anchor, true)) || n.anchor.quote.exact));   // (a note on the whole paper quotes nothing)
+    out.push('', `^${n.id}`, '');
+    if (n.text && n.text.trim()) out.push(n.text.trim(), '');
+    out.push(`[${T[ui].n_open}](${noteLink(n)})`, '');
+    return out;
+  }
+  function notesMarkdown(kinds, para) {
+    const out = mdHead(D.meta.title, [], 'textfold/notes@1');
     let sec = null;
-    const quote = (s) => s.split('\n').map((l) => `> ${l}`);
     for (const n of inOrder(kinds)) {
       const g = groupOf(n.anchor);
       if (g && g !== sec) { sec = g; out.push(`## ${g}`, ''); }
-      const said = n.kind === 'ask' ? turnsOf(n).filter((x) => x.a) : [];
-      if (said.length) {   // the conversation as one callout: the first question as its title, each later one in bold
-        const whole_ = para && paraOf(n.anchor, true);
-        out.push(...quote(`[!question] ${said[0].q}`), ...(whole_ ? quote(whole_) : n.anchor.quote.exact ? quote(`*${n.anchor.quote.exact}*`) : []));
-        said.forEach((x, k) => out.push('>', ...(k ? quote(`**${x.q}**`) : []), ...(k ? ['>'] : []), ...quote(answerText(x.a)), '>', ...quote(`→ ${x.takeaway}`)));
-      } else out.push(...quote((para && paraOf(n.anchor, true)) || n.anchor.quote.exact));
-      out.push('', `^${n.id}`, '');
-      if (n.text && n.text.trim()) out.push(n.text.trim(), '');
-      out.push(`[${t.n_open}](${noteLink(n)})`, '');
+      out.push(...noteMd(n, para));
     }
     out.push('---', '', `*Made with [${BRAND}](${REPO})*`, '');
     return out.join('\n');
+  }
+  // the whole text as Markdown at the level being read (a paragraph opened in place, as it is open), in the language
+  // being read: each heading, the section's summary where the level shows one (Topic, Takeaway, Key), then its
+  // paragraphs, a bullet each at the written levels and a paragraph each at Brief and Full. The marks chosen sit
+  // under their paragraph (or section, or the title) as the notes' own file writes them; a highlight alone, in the
+  // author's words that Brief and Full show, is marked in them (==…==) instead. At Topic it is an outline: the
+  // headings and the paragraphs' topics, which an outliner or a mind-map plugin draws as a map
+  function docMarkdown(kinds) {
+    const m = D.meta, t = T[ui], title = m.name || (lang !== 'en' && m.titles && m.titles[lang]) || m.title;
+    const out = mdHead(title, [`level: ${LEVEL_NAMES[level]}`, `lang: ${lang}`], null);
+    out.push(`*${t.levels[level]} · ${BRAND}*`, '');
+    const mine = new Map();
+    for (const n of inOrder(kinds)) { const k = keyOf(n.anchor); if (!mine.has(k)) mine.set(k, []); mine.get(k).push(n); }
+    const notesAt = (k) => (mine.get(k) || []).flatMap((n) => noteMd(n, false));
+    out.push(...notesAt('¶'));
+    const flat = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    for (const c of D.chunks) {
+      const sc = secs.get(c.id);
+      if (!sc || (level < 4 && sc.sec.classList.contains('ref'))) continue;   // (dropped at the folded levels, as on the page)
+      if (c.num || c.title) out.push(`${'#'.repeat(Math.min(6, c.level || 2))} ${headingOf(c)}`, '');
+      const sum = level <= 2 ? summaryOf(c) : '';
+      if (sum) out.push(`**${sum}**`, '');
+      out.push(...notesAt(`§${c.id}`));
+      let list = false;   // (bullets that follow one another: one list)
+      for (const uid of c.units) {
+        const L = levelOf(uid), u = U[uid], marks = mine.get(uid) || [], under = [];
+        let text = unitEl.has(uid) ? piecesText(pieces(uid, L)) : '';
+        for (const n of marks) {
+          const ex = L >= 3 && kindOf(n) === 'hl' && flat(n.anchor.quote && n.anchor.quote.exact), at = ex ? text.indexOf(ex) : -1;
+          if (at >= 0) text = `${text.slice(0, at)}==${ex}==${text.slice(at + ex.length)}`; else under.push(n);
+        }
+        if (!text && !under.length) continue;
+        const bullet = L <= 2 || u.role === 'item';
+        if (text) {
+          if (!bullet && list) out.push('');
+          out.push(bullet ? `${L > 2 && u.marker && /\d/.test(u.marker) ? u.marker : '-'} ${text}` : u.role === 'caption' ? `*${text}*` : text);
+          if (!bullet) out.push('');
+          list = bullet;
+        }
+        if (under.length) { if (list) out.push(''); list = false; for (const n of under) out.push(...noteMd(n, false)); }
+      }
+      if (list) out.push('');
+    }
+    out.push('---', '', `*Made with [${BRAND}](${REPO})*`, '');
+    return out.join('\n').replace(/\n{3,}/g, '\n\n');
   }
   // PDF of the paper as it stands: the level being read (with the paragraphs opened in place), the highlights, and
   // the notes and conversations under their paragraphs; a line naming the level on top, the TextFold mark at the
@@ -2597,9 +3081,9 @@
     for (const n of notes) if (shown(n.anchor)) counts[kindOf(n)]++;
     const total = counts.hl + counts.note + counts.ask;
     if (!total && sv.what === 'marks') sv.what = 'whole';
-    const fmts = sv.what === 'whole' ? [...(D.app ? ['html'] : []), 'pdf'] : ['html', 'pdf', 'md', 'json'];   // (a page that is a file already prints)
+    const fmts = sv.what === 'whole' ? [...(D.app ? ['html'] : []), 'pdf', 'md'] : ['html', 'pdf', 'md', 'json'];   // (a page that is a file already prints)
     if (!fmts.includes(sv.fmt)) sv.fmt = fmts[0];
-    const fmtName = { html: t.sv_html, pdf: sv.what === 'whole' ? t.sv_pdf_level.replace('{level}', t.levels[level]) : t.sv_pdf, md: t.sv_md, json: t.sv_json };
+    const fmtName = { html: t.sv_html, pdf: sv.what === 'whole' ? t.sv_pdf_level.replace('{level}', t.levels[level]) : t.sv_pdf, md: sv.what === 'whole' ? t.sv_md_level.replace('{level}', t.levels[level]) : t.sv_md, json: t.sv_json };
     const radio = (name, value, label, sub, off) => `<label class="sv-opt${off ? ' off' : ''}"><input type="radio" name="${name}" value="${value}"` +
       `${sv[name] === value ? ' checked' : ''}${off ? ' disabled' : ''}><span><b>${esc(label)}</b>${sub ? `<em>${esc(sub)}</em>` : ''}</span></label>`;
     const box = (k, label) => `<label class="sv-box${counts[k] ? '' : ' off'}"><input type="checkbox" name="kind" value="${k}"` +
@@ -2615,7 +3099,7 @@
       <div class="sv-row"><div class="sv-l">${esc(t.sv_what)}</div><div class="sv-opts">${radio('what', 'whole', t.sv_whole, t.sv_whole_d)}${radio('what', 'marks', t.sv_marks, t.sv_marks_d, !total)}</div></div>
       <div class="sv-row"><div class="sv-l">${esc(t.sv_incl)}</div><div class="sv-boxes">${box('hl', t.sv_hl)}${box('note', t.sv_notes)}${box('ask', t.sv_asks)}${para}</div></div>
       <div class="sv-row"><div class="sv-l">${esc(t.sv_fmt)}</div><div class="sv-opts sv-fmts">${fmts.map((f) => radio('fmt', f, fmtName[f])).join('')}</div></div>
-      ${langs ? `<div class="sv-row"><div class="sv-l">${esc(t.sv_langs)}</div><div class="sv-opts sv-fmts">${radio('langs', 'current', t.sv_lang_cur.replace('{lang}', I18N.NATIVE[lang]))}${radio('langs', 'all', t.sv_lang_all.replace('{n}', AVAIL.length))}</div></div>` : ''}
+      ${langs ? `<div class="sv-row"><div class="sv-l">${esc(t.sv_langs)}</div><div class="sv-opts sv-fmts">${radio('langs', 'current', t.sv_lang_cur.replace('{lang}', nameOf(lang)))}${radio('langs', 'all', t.sv_lang_all.replace('{n}', AVAIL.length))}</div></div>` : ''}
       <p class="sv-lic">${esc(t.sv_lic)}</p>
       ${err ? `<p class="sv-err">${esc(err)}</p>` : ''}
       <div class="sv-acts"><button type="button" class="sv-cancel">${esc(t.cancel)}</button><button type="submit" class="sv-go"${sv.what === 'marks' && !picked ? ' disabled' : ''}>${esc(t.sv_go)}</button></div>
@@ -2674,8 +3158,8 @@
       return;
     }
     const whole = sv.what === 'whole';
-    const [file, type, make] = whole
-      ? [`${name}.html`, 'text/html', async () => {   // made by the server: the levels, the languages, the notes chosen
+    const [file, type, make] = whole && sv.fmt === 'md' ? [`${name} (${t.levels[level]}).md`, 'text/markdown', () => docMarkdown(kinds)]
+      : whole ? [`${name}.html`, 'text/html', async () => {   // made by the server: the levels, the languages, the notes chosen
         working();
         const r = await fetch('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ paper: D.meta.id, lang, langs: sv.langs === 'all' ? 'all' : 'current', kinds: [...kinds], pdf: !!sv.pdf && PDF_OK }) });
@@ -3318,6 +3802,7 @@ math { font-size: 1.05em; }
   bar.setAttribute('aria-valuemin', '0');
   bar.setAttribute('aria-valuemax', '4');
   function updateBar() {
+    if (mapReady) { tview.hidden = level !== 0; mapSync(); savePosSoon(); }
     barButtons().forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.l === level)));
     bar.setAttribute('aria-valuenow', String(level));
     bar.setAttribute('aria-valuetext', T[ui].levels[level]);
@@ -3333,19 +3818,25 @@ math { font-size: 1.05em; }
   function renderLangMenu() {
     const t = T[ui];
     langMenu.replaceChildren();
-    for (const code of I18N.CODES) {
+    if (D.app && gapTag(lang, t)) {   // first: the paragraphs left untranslated, asked for again (the rest stays as it is)
+      const f = h('button', 'lm-item lm-regen lm-fill'); f.type = 'button';
+      f.innerHTML = `<span>↻ ${esc(t.gaps_fill.replace('{n}', GAPS[lang]))}</span><em>${esc(nameOf(lang))}</em>`;
+      f.addEventListener('click', () => { closeLangMenu(); window.DRApp.fill(lang); });
+      langMenu.append(f);
+    }
+    for (const code of Object.keys(NAMES)) {
       if (D.meta.reading_mode === 'original' && code !== 'en') continue;
       const have = AVAIL.includes(code);
       if (!have && !D.app) continue;
       const b = h('button', `lm-item${code === lang ? ' on' : ''}${have ? '' : ' gen'}`);
       b.type = 'button';
-      b.innerHTML = `<span>${esc(I18N.NATIVE[code])}</span>${!have ? `<em>+ ${esc(t.gen_lang)}</em>` : STALE.has(code) ? `<em class="stale">${esc(t.stale)}</em>` : ''}`;
+      b.innerHTML = `<span>${esc(nameOf(code))}</span>${!have ? `<em>+ ${esc(t.gen_lang)}</em>` : STALE.has(code) ? `<em class="stale">${esc(t.stale)}</em>` : gapTag(code, t)}`;
       b.addEventListener('click', () => { closeLangMenu(); if (have) setLang(code); else window.DRApp.generate(code, false); });
       langMenu.append(b);
     }
     if (D.app) {
       const r = h('button', 'lm-item lm-regen'); r.type = 'button';
-      r.innerHTML = `<span>↻ ${esc(t.regen)}</span><em>${esc(I18N.NATIVE[lang])}</em>`;
+      r.innerHTML = `<span>↻ ${esc(t.regen)}</span><em>${esc(nameOf(lang))}</em>`;
       r.addEventListener('click', () => { closeLangMenu(); window.DRApp.generate(lang, true); });
       langMenu.append(r);
     }
@@ -3353,6 +3844,7 @@ math { font-size: 1.05em; }
   function closeLangMenu() { langMenu.hidden = true; langBtn.setAttribute('aria-expanded', 'false'); }
   langBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    closeTypeMenu();
     if (!langMenu.hidden) return closeLangMenu();
     renderLangMenu(); langMenu.hidden = false; langBtn.setAttribute('aria-expanded', 'true');
   });
@@ -3408,6 +3900,259 @@ math { font-size: 1.05em; }
     if (!pic) closeLightbox();
   });
 
+  // ── where this text was being read (kept in this browser, the last 300 texts): its level and the paragraph at the
+  //    reading line, saved as the reader scrolls or zooms. Opened again (and with no place asked for in its link),
+  //    it comes back there, says so, and offers the beginning. A line under the top bar shows how far in it is ──
+  const POS_KEY = 'textfold.pos';
+  const readPos = () => { try { return JSON.parse(store.get(POS_KEY) || '{}') || {}; } catch { return {}; } };
+  let posTimer = 0;
+  function savePos() {
+    if (busy || stage || mapShown) return;
+    const a = defaultAnchor(), el = a && a.el;
+    const uid = el && (el.dataset.u || (el.classList.contains('hd') && IDS[HEAD_IDX.get(el)]));
+    if (!uid) return;
+    const all = readPos();
+    all[D.meta.id] = { u: uid, l: level, y: Math.round(unitEl.get(uid).getBoundingClientRect().top), t: Date.now() };
+    const keep = Object.entries(all).sort((x, y) => y[1].t - x[1].t).slice(0, 300);
+    store.set(POS_KEY, JSON.stringify(Object.fromEntries(keep)));
+  }
+  const savePosSoon = () => { clearTimeout(posTimer); posTimer = setTimeout(savePos, 700); };
+  const progEl = h('div', 'readprog', '<i></i>');
+  document.querySelector('.topbar').append(progEl);
+  let progFrame = 0;
+  function placeProg() {
+    progFrame = 0;
+    const max = document.documentElement.scrollHeight - innerHeight;
+    progEl.firstChild.style.transform = `scaleX(${max > 0 ? Math.min(1, Math.max(0, scrollY / max)) : 0})`;
+  }
+  addEventListener('scroll', () => { savePosSoon(); if (!progFrame) progFrame = requestAnimationFrame(placeProg); }, { passive: true });
+  addEventListener('pagehide', savePos);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') savePos(); });
+
+  // a word over the page, for a while: where the text was opened, the focus just begun
+  const pillEl = h('div', 'rpill');
+  pillEl.hidden = true;
+  pillEl.setAttribute('role', 'status');
+  document.body.append(pillEl);
+  let pillTimer = 0;
+  function pill(html, ms = 2800) {
+    pillEl.innerHTML = html;
+    pillEl.hidden = false;
+    clearTimeout(pillTimer);
+    pillTimer = setTimeout(() => { pillEl.hidden = true; }, ms);
+  }
+  pillEl.addEventListener('click', (e) => { if (e.target.closest('[data-top]')) { pillEl.hidden = true; scrollTo({ top: 0, behavior: 'smooth' }); } });
+
+  // ── focus (F, or the Aa menu): the text alone. The top bar, the zoom bar, the sidebar and the chat move off and
+  //    come back while the pointer is at their edge; F or Esc ends it. Nothing in the column moves but for the room
+  //    the sidebar's rail gave up (a resize: the margins and the keyframes laid out again) ──
+  let focusOn = false;
+  function setFocus(on) {
+    if (on === focusOn) return;
+    focusOn = on;
+    const r = document.documentElement;
+    r.classList.toggle('focus', on);
+    r.classList.remove('show-top', 'show-bottom', 'show-left');
+    if (on) pill(esc(T[ui].focus_on)); else { clearTimeout(pillTimer); pillEl.hidden = true; }
+    dispatchEvent(new Event('resize'));
+  }
+  addEventListener('mousemove', (e) => {
+    if (!focusOn) return;
+    const r = document.documentElement, at = (sel) => !!(e.target.closest && e.target.closest(sel));
+    r.classList.toggle('show-top', e.clientY < 70 || at('.topbar') || !typeMenu.hidden || !langMenu.hidden);
+    r.classList.toggle('show-bottom', e.clientY > innerHeight - 96 || at('footer.zoom, .chatbtn'));
+    r.classList.toggle('show-left', !!D.app && (e.clientX < 60 || at('#sidebar')));
+  }, { passive: true });
+  // (a finger has no hover: a touch at an edge brings that edge's bar back for a while, kept while its menu is open)
+  let edgeTimer = 0;
+  addEventListener('pointerdown', (e) => {
+    if (!focusOn || e.pointerType === 'mouse') return;
+    const r = document.documentElement, top = e.clientY < 70, bottom = e.clientY > innerHeight - 96, left = !!D.app && e.clientX < 40;
+    if (!top && !bottom && !left) return;
+    r.classList.toggle('show-top', top); r.classList.toggle('show-bottom', bottom); r.classList.toggle('show-left', left);
+    clearTimeout(edgeTimer);
+    const off = () => { if (!typeMenu.hidden || !langMenu.hidden) { edgeTimer = setTimeout(off, 1000); return; } r.classList.remove('show-top', 'show-bottom', 'show-left'); };
+    edgeTimer = setTimeout(off, 4000);
+  }, { passive: true });
+
+  // ── Topic as a mind map: the title on the left, its sections and theirs to the right, each paragraph's topic at a
+  //    branch's end. Chosen beside the zoom bar (kept in this browser), it is drawn over the page at rest at Topic and
+  //    only then: the page stays under it as it was, so a zoom plays from the cards as ever, the map gone as it starts.
+  //    A section folds and unfolds with a click; a topic opens its paragraph at Key, as its chip on a card does ──
+  const TV_KEY = 'textfold.topicview';
+  let topicView = store.get(TV_KEY) === 'map' ? 'map' : 'cards';
+  const tview = h('div', 'tview');
+  tview.setAttribute('role', 'radiogroup');
+  tview.hidden = true;
+  const zrow = h('div', 'zrow');
+  bar.before(zrow);
+  zrow.append(h('span', 'zside'), bar, tview);
+  const ICON = {
+    cards: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2" width="5.5" height="5" rx="1.3" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="2" width="5.5" height="5" rx="1.3" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="1.5" y="9" width="5.5" height="5" rx="1.3" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="9" width="5.5" height="5" rx="1.3" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+    map: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="2" fill="currentColor"/><path d="M5 8 C8 8 8 3 11 3 M5 8 H11 M5 8 C8 8 8 13 11 13" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="13" cy="3" r="1.6" fill="currentColor"/><circle cx="13" cy="8" r="1.6" fill="currentColor"/><circle cx="13" cy="13" r="1.6" fill="currentColor"/></svg>',
+  };
+  function renderTview() {
+    const t = T[ui];
+    tview.setAttribute('aria-label', t.tv_label);
+    tview.innerHTML = ['cards', 'map'].map((k) => `<button type="button" role="radio" aria-checked="${topicView === k}" data-view="${k}">${ICON[k]}<span>${esc(t[`tv_${k}`])}</span></button>`).join('');
+  }
+  tview.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b || b.dataset.view === topicView) return;
+    topicView = b.dataset.view;
+    store.set(TV_KEY, topicView);
+    renderTview();
+    mapSync();
+  });
+  const mapEl = h('div', 'mmap'), mapTools = h('div', 'mm-tools'), mapCanvas = h('div', 'mm-canvas');
+  mapEl.hidden = true;
+  mapEl.append(mapTools, mapCanvas);
+  document.body.append(mapEl);
+  let mapRoot = null, mapKey = '';
+  // the tree: a section under the last one above it of a higher level; a paragraph's topic under its section (the
+  // opening text's, under the title); the topics before the subsections, as the text has them
+  function mapTree() {
+    const m = D.meta, root = { kind: 'root', html: esc(m.name || (lang !== 'en' && m.titles && m.titles[lang]) || m.title), kids: [] };
+    const stack = [{ lv: 0, node: root }];
+    for (const c of D.chunks) {
+      const sc = secs.get(c.id);
+      if (!sc || sc.sec.classList.contains('ref')) continue;
+      const lv = c.level || 2;
+      let node = stack[stack.length - 1].node;
+      if (c.num || c.title) {
+        while (stack.length > 1 && stack[stack.length - 1].lv >= lv) stack.pop();
+        node = { kind: 'sec', c, html: sc.hd.innerHTML, kids: [], depth: stack.length };
+        stack[stack.length - 1].node.kids.push(node);
+        stack.push({ lv, node });
+      }
+      for (const uid of c.units) {
+        const pcs = unitEl.has(uid) ? pieces(uid, 0) : [];
+        if (!pcs.length) continue;
+        const span = h('span', 'mm-tx');
+        pcs.forEach((x, k) => {   // (a CJK document's word may be a bare string)
+          span.append(x.gap ? '…' : typeof x.tok === 'string' ? x.tok : tokEl(x.tok, ''));
+          if (k < pcs.length - 1 && (x.gap || (x.tok && x.tok.s))) span.append(' ');
+        });
+        node.kids.push({ kind: 'leaf', uid, html: span.innerHTML, role: U[uid].lad.role, kids: [] });
+      }
+    }
+    const paint = (n, b) => { n.b = b; n.kids.forEach((k, i) => paint(k, n.kind === 'root' ? i % 6 : b)); };
+    paint(root, 0);
+    return root;
+  }
+  const leavesIn = (n) => n.kids.reduce((s, k) => s + (k.kind === 'leaf' ? 1 : leavesIn(k)), 0);
+  // a section folded shows nothing under it (closed), or its sections without its topics (bare); either says how
+  // many topics it keeps out of sight
+  const shownKids = (n) => (n.closed ? [] : n.bare ? n.kids.filter((k) => k.kind !== 'leaf') : n.kids);
+  const hiddenIn = (n) => (n.closed ? leavesIn(n) : n.bare ? n.kids.filter((k) => k.kind === 'leaf').length : 0);
+  function mapRender() {
+    const t = T[ui];
+    mapKey = `${lang}|${ui}`;
+    const was = new Map();   // (what was folded stays folded)
+    (function keep(n) { if (n && n.c) was.set(n.c.id, [n.closed, n.bare]); (n ? n.kids : []).forEach(keep); })(mapRoot);
+    mapRoot = mapTree();
+    (function fold(n) { if (n.c && was.has(n.c.id)) [n.closed, n.bare] = was.get(n.c.id); n.kids.forEach(fold); })(mapRoot);
+    mapTools.innerHTML = `<button type="button" data-mm="all">${esc(t.mm_all)}</button><button type="button" data-mm="secs">${esc(t.mm_secs)}</button><span class="mm-hint">${esc(t.mm_hint)}</span>`;
+    mapLayout();
+  }
+  // each node right of its parent; a node's children one under another, the node level with the first of them (a long
+  // text reads down the map as down its outline, the title at the top)
+  function mapLayout() {
+    mapCanvas.replaceChildren();
+    const els = [], svgNS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(svgNS, 'svg');
+    mapCanvas.append(svg);
+    (function make(n) {
+      const cls = n.kind === 'root' ? 'mm-root' : n.kind === 'sec' ? `mm-sec d${n.depth}` : `mm-leaf${notesOf.has(n.uid) ? ' has-notes' : ''}`;
+      const el = h('div', `mm-n ${cls}`);
+      el.style.setProperty('--b', `var(--br-${n.b})`);
+      if (n.kind === 'leaf') { el.style.setProperty('--d', `var(--r-${n.role})`); el.dataset.u = n.uid; el.innerHTML = `<i class="mm-dot"></i><span>${n.html}</span>`; }
+      else el.innerHTML = n.html + (hiddenIn(n) ? `<span class="mm-more">+${hiddenIn(n)}</span>` : '');
+      if (n.kind === 'sec') el.dataset.sec = n.c.id;
+      texify(el);
+      n.el = el;
+      mapCanvas.append(el);
+      els.push(n);
+      shownKids(n).forEach(make);
+    })(mapRoot);
+    for (const n of els) { n.w = n.el.offsetWidth; n.h = n.el.offsetHeight; }
+    const GAPX = 46, PAD = 24;
+    let right = 0;
+    (function place(n, x, y) {
+      n.x = x;
+      right = Math.max(right, x + n.w);
+      const kids = shownKids(n);
+      if (!kids.length) { n.y = y; return n.h; }
+      let cy = y;
+      kids.forEach((k, i) => { cy += place(k, x + n.w + GAPX, cy) + (i < kids.length - 1 ? (k.kind === 'leaf' && kids[i + 1].kind === 'leaf' ? 5 : 14) : 0); });
+      const a = kids[0];
+      n.y = Math.max(y, a.y + a.h / 2 - n.h / 2);
+      return Math.max(cy - y, n.y + n.h - y);
+    })(mapRoot, PAD, PAD + 10);
+    let bottom = 0, paths = '';
+    for (const n of els) {
+      n.el.style.transform = `translate(${n.x}px, ${n.y}px)`;
+      bottom = Math.max(bottom, n.y + n.h);
+      for (const k of shownKids(n)) {
+        const x1 = n.x + n.w, y1 = n.y + n.h / 2, x2 = k.x, y2 = k.y + k.h / 2, xm = (x1 + x2) / 2;
+        paths += `<path class="${k.kind === 'leaf' ? 'leaf' : ''}" style="--b: var(--br-${k.b})" d="M${x1} ${y1} C${xm} ${y1} ${xm} ${y2} ${x2} ${y2}"/>`;
+      }
+    }
+    svg.innerHTML = paths;
+    mapCanvas.style.width = `${right + PAD}px`;
+    mapCanvas.style.height = `${bottom + PAD}px`;
+  }
+  // where it lies: under the bar at the top, beside the sidebar (the app's)
+  function mapFrame() {
+    const tb = document.querySelector('.topbar'), bs = getComputedStyle(document.body);
+    mapEl.style.top = `${Math.max(0, tb ? tb.getBoundingClientRect().bottom : 0)}px`;
+    mapEl.style.left = `${parseFloat(bs.paddingLeft) || 0}px`;
+  }
+  function mapSync() {
+    const can = mapReady && topicView === 'map' && level === 0 && !localLevel.size && !document.documentElement.classList.contains('compare');
+    if (!can) { if (mapShown) mapAway(); return; }
+    if (mapShown || busy || stage) return;   // (over the page already; or, once the motion is over: rest(), done())
+    mapFrame();
+    mapEl.hidden = false;   // (shown first: the nodes are measured as they are laid out)
+    mapShown = true;
+    if (mapKey !== `${lang}|${ui}` || !mapRoot) mapRender();
+  }
+  function mapAway() { mapEl.hidden = true; mapShown = false; }
+  mapTools.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mm]');
+    if (!b) return;
+    const secsOnly = b.dataset.mm === 'secs';
+    (function walk(n) { if (n.kind === 'sec') { n.closed = false; n.bare = secsOnly; } n.kids.forEach(walk); })(mapRoot);
+    mapLayout();
+  });
+  mapCanvas.addEventListener('click', (e) => {
+    const leaf = e.target.closest('.mm-leaf'), sec = e.target.closest('.mm-sec');
+    if (leaf) {   // its paragraph at Key, where the topic was on the screen
+      const el = unitEl.get(leaf.dataset.u);
+      if (!el) return;
+      const y = leaf.getBoundingClientRect().top;
+      mapAway();
+      scrollBy(0, el.getBoundingClientRect().top - y);
+      setLevel(2, { el, y, frac: 0 });
+      return;
+    }
+    if (!sec) return;
+    const find = (n) => (n.c && n.c.id === sec.dataset.sec ? n : n.kids.reduce((f, k) => f || find(k), null));
+    const n = find(mapRoot);
+    if (!n || !n.kids.length) return;
+    const y0 = sec.getBoundingClientRect().top;
+    if (n.closed || n.bare) (function open(x) { x.closed = x.bare = false; x.kids.forEach(open); })(n);   // (open with what is under it)
+    else n.closed = true;
+    mapLayout();
+    const again = mapCanvas.querySelector(`[data-sec="${CSS.escape(n.c.id)}"]`);   // (the section stays where it was clicked)
+    if (again) mapEl.scrollTop += again.getBoundingClientRect().top - y0;
+  });
+  // ⌘/Ctrl + wheel and a pinch zoom from the page under it: the map goes before the zoom looks for what it is over
+  addEventListener('wheel', (e) => { if (mapShown && (e.ctrlKey || e.metaKey)) mapAway(); }, { capture: true, passive: true });
+  addEventListener('gesturestart', () => { if (mapShown) mapAway(); }, { capture: true });
+  addEventListener('resize', () => { if (mapShown) mapFrame(); });
+  renderTview();
+  mapReady = true;
+
   // ── input ────────────────────────────────────────────────────────────
   // ⌘/Ctrl + wheel and a trackpad pinch zoom around the pointer; over the slider, the plain wheel zooms
   addEventListener('wheel', (e) => {
@@ -3441,7 +4186,10 @@ math { font-size: 1.05em; }
     else if (/^[1-5]$/.test(e.key)) setLevel(BAR[+e.key - 1]);
     else if (e.key === 'l' && AVAIL.length > 1) setLang(AVAIL[(AVAIL.indexOf(lang) + 1) % AVAIL.length]);
     else if (e.key === 'Escape' && !langMenu.hidden) closeLangMenu();
+    else if (e.key === 'Escape' && !typeMenu.hidden) { closeTypeMenu(); typeBtn.focus(); }
     else if (e.key === 'Escape' && localLevel.size) setLevel(level);
+    else if (e.key === 'f' || e.key === 'F') setFocus(!focusOn);
+    else if (e.key === 'Escape' && focusOn) setFocus(false);
     else return;
     e.preventDefault();
   });
@@ -3484,6 +4232,15 @@ math { font-size: 1.05em; }
   // ── start ────────────────────────────────────────────────────────────
   build();
   for (const [c, hd, st] of headEls) secs.set(c.id, { c, sec: hd.parentNode, hd, st });
+  {   // the Topic map's rows (reader.css): a section with sections under it heads theirs, and one after a deeper one starts its own
+    const lv = (c) => c.level || 2, top = Math.min(...D.chunks.map(lv));
+    D.chunks.forEach((c, i) => {
+      const sc = secs.get(c.id), next = D.chunks[i + 1], prev = D.chunks[i - 1];
+      if (!sc) return;
+      if (next && lv(next) > lv(c) && (c.num || c.title)) sc.sec.classList.add('parent', ...(lv(c) === top ? ['top'] : []));
+      if (prev && lv(prev) > lv(c)) sc.sec.classList.add('newrow');
+    });
+  }
   IDS = [...order.keys()];
   {   // a heading's place in reading order: the first unit after it
     let pend = [];
@@ -3495,8 +4252,13 @@ math { font-size: 1.05em; }
   }
   // ?lang= (the app), #lang= (a static file), then the reader's language, then the one last read in
   const asked = new URLSearchParams(location.search).get('lang') || (/[#&]lang=([\w-]+)/.exec(location.hash) || [])[1];
-  lang = [asked, D.lang, ui, store.get('dr-lang'), 'en', AVAIL[0]].find((l) => l && AVAIL.includes(l));
+  lang = [asked, D.lang, readerLang, store.get('dr-lang'), 'en', AVAIL[0]].find((l) => l && AVAIL.includes(l));
   const start = /[#&]level=([^&]+)/.exec(location.hash);
+  // where it was being read, unless the link names a place or the page comes again after a generation (pf-keep, below)
+  let wasAt = null;
+  try { if (!/[#&](?:u|n|s|level)=/.test(location.hash) && !sessionStorage.getItem('pf-keep')) wasAt = readPos()[D.meta.id] || null; } catch { /* private window */ }
+  if (wasAt && !unitEl.has(wasAt.u)) wasAt = null;
+  if (wasAt && typeof wasAt.l === 'number' && wasAt.l >= 0 && wasAt.l <= 4) level = wasAt.l;
   if (start) {
     const want = decodeURIComponent(start[1]).toLowerCase();
     const L = I18N.CODES.map((c) => T[c].levels.findIndex((n) => n.toLowerCase() === want)).find((i) => i >= 0);
@@ -3520,6 +4282,14 @@ math { font-size: 1.05em; }
   warmSoon(600);
   loadNotes();
   try { if (PDF_OK && innerWidth >= 1100 && localStorage.getItem(CMP_KEY) === '1') openCompare(); } catch { /* private window */ }
+  if (wasAt) {   // (once laid out; again once the type is in, which moves the lines)
+    const el = unitEl.get(wasAt.u), back = () => scrollBy(0, el.getBoundingClientRect().top - wasAt.y);
+    requestAnimationFrame(() => {
+      back();
+      if (IDS.indexOf(wasAt.u) > 2) pill(`${esc(T[ui].pos_back)}<button type="button" data-top="1">${esc(T[ui].pos_top)}</button>`, 6000);
+    });
+    if (document.fonts) document.fonts.ready.then(() => requestAnimationFrame(back));
+  }
   // the page again after a generation (app.js): the level and the paragraph that were being read, where they were
   try {
     const k = JSON.parse(sessionStorage.getItem('pf-keep') || 'null');
@@ -3530,14 +4300,22 @@ math { font-size: 1.05em; }
       if (typeof k.level === 'number' && k.level !== level) { setLevel(k.level); setTimeout(back, DUR + 120); } else back();
     }
   } catch { /* private window */ }
-  // the interface's language, from the app's settings: the text goes with it when the paper has that language
+  // the reader's language, from the app (its settings, the landing's menus): the interface speaks it when it has the
+  // words, else English; the text goes with it when the paper has that language
   function setUi(code) {
-    if (!T[code] || code === ui) return;
-    ui = code;
+    if (!(T[code] || NAMES[code]) || code === readerLang) return;
+    readerLang = code;
+    ui = I18N.uiFor(code);
     store.set(UI_KEY, code);
     if (AVAIL.includes(code) && code !== lang) setLang(code); else applyLang();
   }
-  window.__reader = { setLevel, setLang, setUi, get ui() { return ui; }, zoomBy,
+  // the name the reader gave the text in the library, changed while it is open: its head and the window's title follow
+  function rename(name) {
+    D.meta.name = name || undefined;
+    document.title = name || D.meta.title;
+    applyLang();
+  }
+  window.__reader = { setLevel, setLang, setUi, rename, get ui() { return ui; }, zoomBy,
     get compared() { if (!cmp || !cmp.grams) return null; const ids = [...order.keys()]; return { units: ids.length, found: ids.filter((id) => locate(id)).length, words: cmp.words.length }; }, get level() { return level; }, get lang() { return lang; }, get pos() { return pos; },
     get staged() { return !!stage; }, get _caps() { return caps; }, get keyframes() { return caps.map((c) => (c ? c.P.size : 0)); },
     // holding the zoom at a position, as a hand would (for looking at the motion frame by frame)

@@ -5,25 +5,43 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..', 'textfold', 'web');
-function harness({ model = true, generateError = false } = {}) {
+
+test('ordinary pages without WebMCP do not parse a second copy of the paper', () => {
+  const context = vm.createContext({ document: {
+    modelContext: undefined,
+    getElementById: id => {
+      if (id === 'documentation-chapter') return null;
+      throw new Error('Unsupported ordinary page requested reader context');
+    },
+  } });
+  assert.doesNotThrow(() => vm.runInContext(fs.readFileSync(path.join(root, 'webmcp.js'), 'utf8'), context));
+});
+
+function harness({ model = true, generateError = false, landing = true, zoteroResponse = { ref: '2605.00089', title: 'Fixture' } } = {}) {
   const calls = [], registered = [], papers = [];
   const fetch = async (url, options) => {
     calls.push({ url, options });
     const body = options?.headers?.['Content-Type'] === 'application/json' ? JSON.parse(options.body) : null;
     let data;
-    if (url === '/api/import') { data = { paper: 'md-fixture', title: 'Fixture' }; papers.push({ id: data.paper, readable: true }); }
+    if (url === '/api/import') { data = { paper: 'md-fixture', title: 'Fixture' }; papers.push({ id: data.paper, langs: ['en'] }); }
     else if (url === '/api/generate') {
       if (generateError) return { ok: false, json: async () => ({ error: 'model unavailable' }) };
       data = { id: 'generation', pid: body.paper, status: 'queued' };
     } else if (url === '/api/files') data = { job: { id: 'conversion', pid: 'doc-fixture', status: 'queued' }, via: 'file' };
     else if (url === '/api/papers') data = papers;
+    else if (url === '/api/zotero/read') data = { ...zoteroResponse };
+    else if (url === '/api/zotero' || url.startsWith('/api/zotero/items?')) data = [];
+    else if (url.startsWith('/api/documentation?')) data = null;
+    else if (url.startsWith('/api/zotero/attachments?')) data = { attachments: [] };
+    else if (url === '/api/jobs') data = [{ id: 'generation', pid: 'md-fixture', readable: true, lang: 'en' }];
     else throw new Error(`Unexpected request: ${url}`);
     return { ok: true, json: async () => data };
   };
-  const context = vm.createContext({ File, Uint8Array, atob, fetch, console,
-    window: {}, modelName: model ? 'fixture-model' : '', uiLang: 'zh',
+  const context = vm.createContext({ File, Uint8Array, atob, fetch, console, setTimeout: () => {}, sessionStorage: { getItem: () => null },
+    window: {}, readLang: 'sv', modelName: model ? 'fixture-model' : '', uiLang: 'zh',
+    BOOT: { langs: { en: 'English', zh: '中文', sv: 'Svenska' } }, DATA: null,
     I18N: { CODES: ['en', 'zh'] }, refsOf: async () => ['10.1234/fixture'],
-    document: { getElementById: id => id === 'lang' ? { value: 'en' } : null,
+    document: { getElementById: id => id === 'lang' && landing ? { value: 'en' } : null,
       modelContext: { registerTool: t => { registered.push(t); } } } });
   // Run the shared upload section itself, without the unrelated sidebar/reader DOM.
   const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
@@ -34,7 +52,12 @@ function harness({ model = true, generateError = false } = {}) {
   }; ${upload}`, context);
   vm.runInContext(fs.readFileSync(path.join(root, 'webmcp.js'), 'utf8'), context);
   const tool = registered.find(t => t.name === 'file-import');
-  return { tool, calls, uploads: context.window.TFUploads,
+  return { tool, calls, registered, uploads: context.window.TFUploads,
+    runTool: async (name, args) => {
+      const r = await registered.find(t => t.name === name).execute(args);
+      assert.equal(!!r.isError, false, r.content[0].text);
+      return JSON.parse(r.content[0].text);
+    },
     run: async args => { const result = await tool.execute(args); return { error: !!result.isError, value: JSON.parse(result.content[0].text) }; } };
 }
 
@@ -94,4 +117,98 @@ test('the shared upload enforces the existing file size limit before a request',
   Object.defineProperty(file, 'size', {value:100 * 1024 * 1024 + 1});
   await assert.rejects(h.uploads.importFile(file, 'en'), /too-large/);
   assert.equal(h.calls.length, 0);
+});
+
+test('reading languages beyond interface translations remain available', async () => {
+  const h = harness();
+  const r = await h.run({name: 'fixture.md', text: '# Fixture', lang: 'sv'});
+  assert.equal(r.error, false);
+  assert.equal(JSON.parse(h.calls.find(c => c.url === '/api/generate').options.body).lang, 'sv');
+});
+
+test('reader uploads default to the reading language when its interface falls back to English', async () => {
+  const h = harness({landing: false});
+  const r = await h.run({name: 'fixture.md', text: '# Fixture'});
+  assert.equal(r.error, false);
+  assert.equal(JSON.parse(h.calls.find(c => c.url === '/api/generate').options.body).lang, 'sv');
+});
+
+test('catalog exposes only existing functionality through 19 tools', () => {
+  assert.deepEqual(harness().registered.map(t => t.name).sort(), [
+    'library-query', 'library-open', 'file-import', 'zotero-query', 'zotero-import',
+    'documentation-preview', 'documentation-import', 'documentation-update', 'documentation-retry',
+    'folder-create', 'folder-rename', 'document-move', 'reading-context', 'reading-navigate',
+    'annotation-list', 'annotation-create', 'annotation-update', 'annotation-delete', 'processing-status',
+  ].sort());
+});
+
+test('output from outside is marked untrusted, and a delete as consequential', () => {
+  const hints = Object.fromEntries(harness().registered.map(t => [t.name, t.annotations]));
+  const own = ['library-open', 'folder-create', 'folder-rename', 'document-move'];
+  for (const [name, a] of Object.entries(hints)) assert.equal(!!a.untrustedContentHint, !own.includes(name), name);
+  assert.equal(hints['annotation-delete'].consequentialHint, true);
+  assert.equal(!!hints['annotation-create'].consequentialHint, false);
+});
+
+test('Zotero query delegates library listing and item search to existing endpoints', async () => {
+  const h = harness();
+  await h.runTool('zotero-query', {});
+  await h.runTool('zotero-query', { library: 'users/0', query: 'fixture title' });
+  assert.deepEqual(h.calls.map(c => c.url), ['/api/zotero', '/api/zotero/items?lib=users%2F0&q=fixture%20title']);
+});
+
+test('personal Zotero query can enumerate exact attachments', async () => {
+  const h = harness();
+  await h.runTool('zotero-query', { item: 'users/0/ABCD1234' });
+  assert.equal(h.calls[0].url, '/api/zotero/attachments?item=users%2F0%2FABCD1234');
+});
+
+test('personal Zotero import retains exact attachment and cache-required receipts', async () => {
+  const h = harness({ zoteroResponse: { needs: 'zotero-cache', attachment: 'PDFKEY12' } });
+  const r = await h.runTool('zotero-import', { item: 'users/0/ABCD1234', attachment: 'PDFKEY12' });
+  assert.deepEqual(JSON.parse(h.calls[0].options.body), { item: 'users/0/ABCD1234', attachment: 'PDFKEY12', original: true, lang: 'en' });
+  assert.equal(r.needs, 'zotero-cache');
+  assert.match(r.action, /exact attachment/);
+  assert.equal(h.calls.some(c => c.url === '/api/generate'), false);
+});
+
+test('personal Zotero online references generate original-language levels', async () => {
+  const h = harness();
+  await h.runTool('zotero-import', { item: 'users/0/ABCD1234' });
+  const body = JSON.parse(h.calls.find(c => c.url === '/api/generate').options.body);
+  assert.deepEqual(body, { paper: '2605.00089', lang: 'en', original: true });
+});
+
+test('processing status uses upstream job and language fields rather than a new paper-readable field', async () => {
+  const h = harness();
+  await h.run({ name: 'fixture.md', text: 'Fixture source' });
+  const r = await h.runTool('processing-status', { job: 'generation', paper: 'md-fixture', open: true });
+  assert.equal(r.readable, true);
+  assert.equal(r.job.id, 'generation');
+});
+
+// Ordinary documentation navigation must still work when the browser offers no WebMCP.
+test('personal documentation chapter navigation works without a tool host', () => {
+  const handlers = {}, assigned = [], saved = new Map();
+  const chooser = { value: 'second' };
+  const doc = { meta: { id: 'web-docs', active_chapter: 'first', documentation_chapters: [
+    { id: 'first', available: true }, { id: 'second', available: true },
+  ] }, units: {}, chunks: [], atoms: {}, blocks: [] };
+  const context = vm.createContext({
+    document: {
+      getElementById: id => id === 'documentation-chapter' ? chooser : id === 'paper-data' ? { textContent: JSON.stringify(doc) } : null,
+      querySelectorAll: () => [], querySelector: () => null,
+      addEventListener: (name, fn) => { handlers[name] = fn; },
+    },
+    window: { __reader: { level: 4 }, DR_I18N: { t: () => ({ levels: ['Topic', 'Takeaway', 'Key', 'Brief', 'Full'] }) } },
+    getSelection: () => null, CSS: { escape: s => s },
+    sessionStorage: { getItem: k => saved.get(k) || null, setItem: (k, v) => saved.set(k, v) },
+    setTimeout: fn => fn(), addEventListener: () => {}, URLSearchParams,
+    location: { hash: '', search: '', assign: url => assigned.push(url) },
+  });
+  vm.runInContext(fs.readFileSync(path.join(root, 'documentation.js'), 'utf8'), context);
+  chooser.onchange();
+  assert.match(assigned[0], /chapter=second/);
+  assert.equal(JSON.parse(saved.get('tf-reading-web-docs')).chapter, 'first');
+  assert.equal(typeof handlers['textfold-note-navigate'], 'function');
 });
