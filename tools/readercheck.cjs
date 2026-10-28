@@ -11,14 +11,20 @@ fs.mkdirSync(out,{recursive:true});
 const b=await chromium.launch({channel:'msedge',headless:false,args:['--enable-gpu-rasterization']});
 const p=await b.newPage({viewport:{width:1512,height:982},deviceScaleFactor:2});
 const errors=[];p.on('pageerror',e=>errors.push(e.message));
-await p.addInitScript(()=>{window.__drPerf=[];});
+await p.addInitScript(()=>{
+window.__drPerf=[];
+const attach=Element.prototype.attachShadow;
+Element.prototype.attachShadow=function(options){const root=attach.call(this,options);if(this.classList.contains('zhost'))window.readerStage=root;return root;};
+});
 await p.goto(url);
 await p.waitForTimeout(2000);
 const results=[];
 for(const width of [1512,1000]){
 await p.setViewportSize({width,height:982});await p.waitForTimeout(1000);
 for(const level of [4,3,2,1,0,4]){
-await p.evaluate(l=>__reader.setLevel(l),level);await p.waitForTimeout(1800);
+await p.evaluate(l=>__reader.setLevel(l),level);
+await p.waitForFunction(l=>__reader.level===l && !document.documentElement.classList.contains('morphing'),level,{timeout:10000});
+await p.waitForTimeout(1000);
 assert.equal(await p.evaluate(()=>__reader.level),level);
 const geometry=await p.evaluate(()=>{
  const es=[...document.querySelectorAll('#doc .eq-body')].filter(el=>el.getBoundingClientRect().height>0);
@@ -40,9 +46,15 @@ assert(pin,'a reading anchor is visible');await p.waitForTimeout(1400);
 const drift=await p.evaluate(pin=>({top:document.querySelector(`[data-u="${pin.id}"]`).getBoundingClientRect().top-pin.top,height:document.documentElement.scrollHeight-pin.height}),pin);
 assert(Math.abs(drift.top)<1 && Math.abs(drift.height)<1,JSON.stringify(drift));
 results.push({width,drift});
-await p.evaluate(()=>__reader.scrubTo(3.5));await p.waitForTimeout(400);
-const animation=await p.evaluate(()=>({staged:__reader.staged,animations:document.getAnimations().length,pos:__reader.pos}));
+await p.evaluate(()=>__reader.scrubTo(3.5));
+await p.waitForFunction(()=>(__reader.staged || document.getAnimations().length>0),{timeout:10000});
+await p.waitForTimeout(400);
+const animation=await p.evaluate(()=>({staged:__reader.staged,animations:document.getAnimations().length,pos:__reader.pos,
+formulas:[...readerStage.querySelectorAll('.zl.live .eq-body')].map(el=>{
+const r=el.getBoundingClientRect();return {visibility:getComputedStyle(el).contentVisibility,width:r.width,height:r.height,top:r.top,math:el.querySelector('math')?.getBoundingClientRect().height};
+}).filter(x=>x.height>0 && x.top>0 && x.top+x.height<innerHeight)}));
 assert(animation.staged || animation.animations>0,'level changes must still animate');
+assert(animation.formulas.every(eq=>eq.width>0 && eq.visibility==='visible'),'equation copies must not be clipped by their motion group');
 results.push({width,animation});
 if(width===1512)await p.screenshot({path:path.join(out,'animation.png')});
 await p.evaluate(()=>__reader.letGo());await p.waitForTimeout(1500);

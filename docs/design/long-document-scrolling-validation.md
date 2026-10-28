@@ -85,3 +85,43 @@ or a reader JavaScript error. Zoom traces are bounded by user-timing marks aroun
 animation, excluding later background preparation. `--zoom-only` runs the gesture comparison by itself.
 
 User acceptance of the running trial is still pending.
+
+## Follow-up: reading-level wheel still stalled
+
+The user confirmed ordinary page scrolling was much better but rejected reading-level wheel performance.
+The earlier gentle pinch measurements did not cover rapid normal wheel detents and reversals over the level bar.
+That stronger test reproduced live preparation work of 59–77 ms and browser long tasks up to 155 ms.
+
+The owning bug was `anchorAt`: an equation or a gap inside a long section selected the section heading even
+when the heading was several screens above the viewport. The prepared keyframe covered the actual passage,
+so the distant heading was missing and `stageBegin` rejected it. The reader repeatedly fell back to live-page
+layout and hundreds of live animations. When the heading is off screen the anchor now uses the nearest
+paragraph. Equation explanation captions, which disappear at Full/Brief, resolve to their source passage.
+
+A separate visual bug became visible once the stage actually ran: equation copies inherited `max-width:100%`
+inside zero-width animation groups. Their native MathML retained its width but the outer copy was clipped to
+zero width. Measured animation boxes now override that maximum width, retaining their actual pixel width.
+Visual inspection confirmed the equations remain drawn during a held Full-to-Brief transition. Browser
+regression checks verify the animated formula copies have nonzero width and visible content.
+
+An experiment preparing cold zooms asynchronously on demand was discarded: it introduced interruption and
+direction-change problems. The final change retains the existing zoom timing and animation pipeline.
+
+The focused rapid-wheel comparison before the final width repair is retained in `launch/scroll/before-levels.json`
+and `launch/scroll/anchor-only-levels.json`. In the rested passage the repaired anchor used the stage for all
+level crossings and reversals, with no long tasks. Immediately after a page jump it still used the live fallback,
+but the longest measured preparation fell to 38.4 ms; browser tasks up to 92 ms remained. This is an improvement,
+not a claim that every cold transition is stutter-free. The final GPU benchmark and two-width geometry checks
+are retained under `launch/scroll/anchor-final` and `launch/scroll/anchor-checks`.
+
+All five levels and interruptions passed at 1512 and 1000 px; formula geometry and reading-position drift remained
+zero. The test suite rerun completed 370 tests in 21.087 s, OK with 18 skipped and the same resource cleanup warnings.
+The branch remains unmerged pending another user trial.
+
+Final follow-up benchmark (`launch/scroll/anchor-final/candidate.json`) passed its level destinations,
+rapid-wheel preparation threshold, and JavaScript-error checks. GPU frame drops for pinch out/in, slider drag,
+and clicking Full were 0.2/0.4/1.8/7.3%; the previous paired trial recorded 2.3/1.2/4.0/12.7%.
+These are individual local runs. The rested rapid-reversal test used the stage throughout and committed in
+47.8 ms; the cold test still used live preparation, up to 49.7 ms, and recorded browser tasks up to 120 ms.
+The latter remains a known performance limitation for the user to assess, not a resolved stutter-free case.
+Page scrolling recorded no long tasks at Full/Brief/Key in this run; dropped-frame percentages were 0/0/2.3%.

@@ -191,7 +191,8 @@ html.morphing .dot, html.morphing .legend i { animation: none !important; }
 .zstage.on .zl.live > .zg, .zstage.on .zl.live > .zp { will-change: transform, opacity; }
 .zp { position: absolute !important; left: 0 !important; top: 0 !important; margin: 0 !important; transform-origin: 0 0; transition: none !important; animation: none !important; pointer-events: none; }
 .zp.zi { white-space: nowrap; }
-.zp.zb { white-space: normal; overflow: hidden; }
+/* Copies have measured pixel widths. A formula's max-width:100% would clamp it to its zero-width motion group. */
+.zp.zb { white-space: normal; overflow: hidden; max-width: none; }
 .zp img { max-width: 100%; height: auto; display: inline-block; }
 /* the sandbox a keyframe is laid out in: in the flow of nothing, never painted */
 .zsand { position: fixed; top: 0; height: 0; overflow: hidden; opacity: 0; pointer-events: none; contain: layout style paint; }

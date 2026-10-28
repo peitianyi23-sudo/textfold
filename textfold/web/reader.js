@@ -687,10 +687,20 @@
     let el = document.elementFromPoint(x, y);
     el = el && el.closest('.u, .hd, figure.fig, .chunk');
     if (el && el.matches('figure.fig')) el = el.querySelector('.u') || el;
-    if (el && el.matches('.chunk')) el = el.querySelector('.hd');
+    if (el && el.classList.contains('eq-caption')) {
+      const equation = el.closest('.eq');
+      el = equation && unitEl.get(equation._owner) || null;
+    }
+    if (el && el.matches('.chunk')) {
+      const hd = el.querySelector('.hd'), r = hd && hd.getBoundingClientRect();
+      // A gap or equation deep inside a section must not anchor to a heading several screens
+      // above it: the prepared keyframe covers the reading passage, not that distant heading.
+      el = r && r.bottom > 0 && r.top < innerHeight ? hd : null;
+    }
     if (!el || !docEl.contains(el)) {
       let best = null, bd = Infinity;
       for (const u of unitEl.values()) {
+        if (u.classList.contains('eq-caption')) continue;   // explanations disappear at Full/Brief
         const r = visibleRect(u); if (!r) continue;
         const d = r.top > y ? r.top - y : r.bottom < y ? y - r.bottom : 0;
         if (d < bd) { bd = d; best = u; }
