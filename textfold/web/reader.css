@@ -363,6 +363,12 @@ figure.fig[data-l="0"] .flabel { font-weight: 600; color: var(--muted); }
 
 .eq { margin: 6px 0 16px; font-size: calc(17px * var(--fs)); max-width: 100%; }
 .eq-body { overflow-x: auto; max-width: 100%; overscroll-behavior-x: contain; }
+/* Exact measured heights keep the scrollbar stable while distant formula trees skip rendering.
+   Stage copies are visible animation artwork and always draw their original formula. */
+.eq-body.eq-sized { content-visibility: auto; }
+.zsand .eq-body.eq-sized { content-visibility: hidden; }
+.zstage .eq-body.eq-sized { content-visibility: visible; }
+@media print { .eq-body.eq-sized { content-visibility: visible; } }
 .raw { margin: 0 0 calc(14px * var(--fs)); font-family: var(--text); color: var(--ink-2); }
 .raw pre { font-family: var(--mono); font-size: calc(13px * var(--fs)); line-height: 1.55; overflow-x: auto; margin: 0; padding: 10px 12px;
   background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
