@@ -687,10 +687,20 @@
     let el = document.elementFromPoint(x, y);
     el = el && el.closest('.u, .hd, figure.fig, .chunk');
     if (el && el.matches('figure.fig')) el = el.querySelector('.u') || el;
-    if (el && el.matches('.chunk')) el = el.querySelector('.hd');
+    if (el && el.classList.contains('eq-caption')) {
+      const equation = el.closest('.eq');
+      el = equation && unitEl.get(equation._owner) || null;
+    }
+    if (el && el.matches('.chunk')) {
+      const hd = el.querySelector('.hd'), r = hd && hd.getBoundingClientRect();
+      // A gap or equation deep inside a section must not anchor to a heading several screens
+      // above it: the prepared keyframe covers the reading passage, not that distant heading.
+      el = r && r.bottom > 0 && r.top < innerHeight ? hd : null;
+    }
     if (!el || !docEl.contains(el)) {
       let best = null, bd = Infinity;
       for (const u of unitEl.values()) {
+        if (u.classList.contains('eq-caption')) continue;   // explanations disappear at Full/Brief
         const r = visibleRect(u); if (!r) continue;
         const d = r.top > y ? r.top - y : r.bottom < y ? y - r.bottom : 0;
         if (d < bd) { bd = d; best = u; }
@@ -885,7 +895,7 @@
     if (pos !== goal) rafId = requestAnimationFrame(tick);
     else { lastT = 0; rest(); }
   }
-  const kick = () => { if (mapShown) mapAway(); if (!rafId) rafId = requestAnimationFrame(tick); };
+  const kick = () => { cancelCapture(); if (mapShown) mapAway(); if (!rafId) rafId = requestAnimationFrame(tick); };
   function release() {   // the hand let go: spring to the level it was heading for
     holding = false;
     if (stage) { const d = pos - stage.last; goal = Math.max(0, Math.min(4, Math.abs(d) > 0.3 ? stage.last + Math.sign(d) : stage.last)); }
@@ -1265,7 +1275,7 @@
     for (const c of docEl.children) { const k = copy(c); if (k) root.append(k); }
     return { root, units, heads };
   }
-  function captureAt(L, cands) {
+  function* captureAt(L, cands) {
     const H = innerHeight, k = K_BAND[L];
     const idx = cands.map((c) => c.idx).filter((i) => i !== undefined);
     if (!idx.length) return;
@@ -1273,39 +1283,43 @@
     const band = L === 0 ? null : bandRange(i0, i1, k);
     const first = IDS[Math.max(0, i0 - k)], last = IDS[Math.min(IDS.length - 1, i1 + k)];
     const { root, units, heads } = sandbox(L, band, first, last);
+    yield;   // let input and rendering run between building, laying out and collecting the keyframe
     const bs = getComputedStyle(document.body), pl = parseFloat(bs.paddingLeft) || 0;
     sandEl.style.left = `${pl}px`;
     sandEl.style.width = `${document.body.clientWidth - pl - (parseFloat(bs.paddingRight) || 0)}px`;
     sandEl.replaceChildren(root);
-    const oy = docEl.getBoundingClientRect().top + scrollY - root.getBoundingClientRect().top;   // (lays the sandbox out)
-    const lim = { start: reachesStart(band) ? 0 : -Infinity, end: reachesEnd(band) ? root.getBoundingClientRect().bottom + oy : Infinity };
-    // what a zoom anchored on any of the candidates may show at L
-    let lo = Infinity, hi = -Infinity;
-    for (const c of cands) {
-      const el = c.el.dataset.u ? units.get(c.key) : heads.get(c.key), r = el && el.getBoundingClientRect();
-      if (!r || (!r.width && !r.height)) continue;
-      const [a, b] = need(c, { y: r.top + oy, h: r.height }, lim);
-      lo = Math.min(lo, a); hi = Math.max(hi, b);
-    }
-    lo -= 0.15 * H; hi += 0.15 * H;
-    if (band) {   // nothing beyond the band was drawn
-      const fe = first !== IDS[0] && units.get(first), le = last !== IDS[IDS.length - 1] && units.get(last);
-      if (fe) lo = Math.max(lo, fe.getBoundingClientRect().top + oy);
-      if (le) hi = Math.min(hi, le.getBoundingClientRect().bottom + oy);
-    }
-    let got = null;
-    const hot = new Set();
-    if (lo < hi) {
-      for (const [uid, el] of units) {
-        const r = el.getBoundingClientRect();
-        if ((r.width || r.height) && r.bottom + oy > lo - 0.3 * H && r.top + oy < hi + 0.3 * H) hot.add(uid);
+    try {
+      yield;
+      const oy = docEl.getBoundingClientRect().top + scrollY - root.getBoundingClientRect().top;   // (lays the sandbox out)
+      const lim = { start: reachesStart(band) ? 0 : -Infinity, end: reachesEnd(band) ? root.getBoundingClientRect().bottom + oy : Infinity };
+      // what a zoom anchored on any of the candidates may show at L
+      let lo = Infinity, hi = -Infinity;
+      for (const c of cands) {
+        const el = c.el.dataset.u ? units.get(c.key) : heads.get(c.key), r = el && el.getBoundingClientRect();
+        if (!r || (!r.width && !r.height)) continue;
+        const [a, b] = need(c, { y: r.top + oy, h: r.height }, lim);
+        lo = Math.min(lo, a); hi = Math.max(hi, b);
       }
-      for (const uid of hot) drawUnit(uid, L, units.get(uid), new Map(), true);
-      got = collect(root, [...hot].map((u) => [u, units.get(u)]), lo, hi, oy, L, true);
-      if (lim.end !== Infinity) lim.end = root.getBoundingClientRect().bottom + oy;
-    }
-    sandEl.replaceChildren();
-    if (got) keep(L, got, lo, hi, hot, band, lim.start, lim.end);
+      lo -= 0.15 * H; hi += 0.15 * H;
+      if (band) {   // nothing beyond the band was drawn
+        const fe = first !== IDS[0] && units.get(first), le = last !== IDS[IDS.length - 1] && units.get(last);
+        if (fe) lo = Math.max(lo, fe.getBoundingClientRect().top + oy);
+        if (le) hi = Math.min(hi, le.getBoundingClientRect().bottom + oy);
+      }
+      let got = null;
+      const hot = new Set();
+      if (lo < hi) {
+        for (const [uid, el] of units) {
+          const r = el.getBoundingClientRect();
+          if ((r.width || r.height) && r.bottom + oy > lo - 0.3 * H && r.top + oy < hi + 0.3 * H) hot.add(uid);
+        }
+        for (const uid of hot) drawUnit(uid, L, units.get(uid), new Map(), true);
+        yield;
+        got = collect(root, [...hot].map((u) => [u, units.get(u)]), lo, hi, oy, L, true);
+        if (lim.end !== Infinity) lim.end = root.getBoundingClientRect().bottom + oy;
+      }
+      if (got) keep(L, got, lo, hi, hot, band, lim.start, lim.end);
+    } finally { sandEl.replaceChildren(); }
   }
 
   // The stretch of page (at some level, in its keyframe's coordinates) that a zoom anchored on c may show. The
@@ -1370,10 +1384,26 @@
   }
 
   // while the reader is still: the next keyframe that is missing, one per task, nearest level first
+  let captureJob = null, captureFrame = 0, captureTimer = 0;
+  function cancelCapture() {
+    cancelAnimationFrame(captureFrame); clearTimeout(captureTimer);
+    captureFrame = captureTimer = 0;
+    if (captureJob) { tried[captureJob.L] = null; captureJob.steps.return(); captureJob = null; }
+  }
+  function advanceCapture(job) {
+    if (job !== captureJob) return;
+    if (busy || job.key !== capKey() || job.level !== level || job.y !== scrollY) {
+      cancelCapture(); warmSoon(); return;
+    }
+    const t0 = performance.now(), next = job.steps.next();
+    perf(`cap${job.L}.step`, t0);
+    if (next.done) { captureJob = null; warmSoon(20); }
+    else captureFrame = requestAnimationFrame(() => { captureTimer = setTimeout(() => advanceCapture(job), 0); });
+  }
   function warmSoon(ms = 360) { clearTimeout(warmTimer); if (!reduced) warmTimer = setTimeout(warm, ms); }
   function warm() {
-    if (busy || stage || tr || drag || holding || localLevel.size || staleQ.length || document.hidden) return;
-    if (performance.now() - lastScrollT < 180) return warmSoon(200);
+    if (captureJob || busy || stage || tr || drag || holding || localLevel.size || staleQ.length || document.hidden) return;
+    if (performance.now() - lastScrollT < 700) return warmSoon(700);
     if (katexCss()) { capEpoch++; return warmSoon(400); }
     const key = capKey();
     caps.forEach((c, L) => { if (c && c.key !== key) drop(L); });
@@ -1389,7 +1419,11 @@
       if (L === level && (docEl.classList.contains('mapfocus') || docEl.dataset.role)) { warmSoon(600); continue; }
       tried[L] = sig;
       const t0 = performance.now();
-      if (L === level) captureHere(); else captureAt(L, cands);
+      if (L !== level) {
+        captureJob = { L, key, level, y: scrollY, steps: captureAt(L, cands) };
+        advanceCapture(captureJob); return;
+      }
+      captureHere();
       perf(`cap${L}`, t0);
       return warmSoon(20);
     }
@@ -1557,8 +1591,9 @@
   }
   addEventListener('scroll', () => {
     lastScrollT = performance.now();
+    cancelCapture();
     if (stage && Math.abs(scrollY - stage.sy) > 1) snapNow();
-    if (!busy) { hydrateSoon(); warmSoon(200); }   // a fifth of a second still: the reader stopped there
+    if (!busy) { hydrateSoon(); warmSoon(750); }   // short pauses belong to reading, not preparing every zoom level
   }, { passive: true });
   addEventListener('pointermove', (e) => { lastPointer = { x: e.clientX, y: e.clientY }; if (level < 4 && !busy) warmSoon(); }, { passive: true });
 
@@ -4222,10 +4257,25 @@ math { font-size: 1.05em; }
     } else toggleUnit(el.dataset.u);
   });
 
-  let relayoutTimer = null;
+  let relayoutTimer = null, equationSizeKey = '';
   function relayout() {
     clearTimeout(relayoutTimer);
-    relayoutTimer = setTimeout(() => { const t0 = performance.now(); layoutSides(); perf('sides', t0); }, 30);
+    relayoutTimer = setTimeout(() => {
+      const t0 = performance.now();
+      // Measure at the current width and type before allowing off-screen formulas to skip layout.
+      // The same exact heights travel into the zoom sandbox; its distant equations need no MathML layout.
+      const equations = [...docEl.querySelectorAll('.eq-body')];
+      const key = `${docEl.clientWidth}|${getComputedStyle(docEl).getPropertyValue('--fs')}|${type.font}`;
+      if (key !== equationSizeKey) for (const el of equations) el.classList.remove('eq-sized');
+      equationSizeKey = key;
+      const shown = equations.filter((el) => el.getBoundingClientRect().width > 0);
+      for (const el of shown) el.classList.remove('eq-sized');
+      const heights = shown.map((el) => el.getBoundingClientRect().height);
+      shown.forEach((el, i) => {
+        if (heights[i] > 0) { el.style.containIntrinsicBlockSize = `${heights[i]}px`; el.classList.add('eq-sized'); }
+      });
+      layoutSides(); perf('sides', t0);
+    }, 30);
   }
   addEventListener('resize', () => { snapNow(); capEpoch++; relayout(); geom = null; placeThumb(); warmSoon(); });
 
